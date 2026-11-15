@@ -22,9 +22,7 @@
 
 ## Related Links
 
-<!-- Public URL, Plane ticket, related PRs -->
-
-- Public URL:
+<!-- Plane ticket, related PRs -->
 - Plane ticket:
 - Related PRs:
 
