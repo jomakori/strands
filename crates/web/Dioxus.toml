@@ -1,0 +1,7 @@
+# Dioxus CLI config for the web-only SPA (spec D1: no SSR/hydration).
+[application]
+name = "strands-web"
+default_platform = "web"
+
+[web.app]
+title = "Strands"

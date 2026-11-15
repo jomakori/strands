@@ -1,0 +1,58 @@
+# Strands pre-commit hooks.
+#
+# Shift-left gate: catches the high-frequency failures at commit time so CI
+# only sees the heavy stuff (full-workspace clippy + test + wasm bundle build).
+#
+# What's IN scope here:
+#   - cargo fmt --all -- --check            (parse + style, no system deps)
+#   - cargo check -p strands-core -p strands-server
+#                                           (the members that build for the host)
+#   - cargo clippy -p strands-core -p strands-server -- -D warnings
+#
+# What's OUT of scope (CI-only):
+#   - strands-web: it only compiles for wasm32-unknown-unknown, so the wasm-build
+#                  CI job lints and builds it.
+#   - cargo test --workspace: needs the full app build.
+#
+# Install: `pre-commit install`. Update: `pre-commit autoupdate`.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-added-large-files
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --all -- --check
+        description: Parse + style every workspace member.
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        types: [rust]
+
+      - id: cargo-check
+        name: cargo check -p strands-core -p strands-server
+        description: Type-check the members that compile for the host target.
+        entry: cargo check -p strands-core -p strands-server --all-targets
+        language: system
+        pass_filenames: false
+        types: [rust]
+
+      - id: cargo-clippy
+        name: cargo clippy -p strands-core -p strands-server -- -D warnings
+        description: Lint the host-target members under -D warnings.
+        entry: cargo clippy -p strands-core -p strands-server --all-targets -- -D warnings
+        language: system
+        pass_filenames: false
+        types: [rust]

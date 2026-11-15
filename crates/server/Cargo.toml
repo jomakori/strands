@@ -1,0 +1,20 @@
+[package]
+name = "strands-server"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "strands-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strands-core = { path = "../core" }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

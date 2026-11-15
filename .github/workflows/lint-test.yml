@@ -1,0 +1,136 @@
+name: lint-test
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  fmt:
+    name: Check formatting
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting across the workspace
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Lint with warnings as errors
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache the cargo registry and build output
+        uses: Swatinem/rust-cache@v2
+
+      # strands-web only compiles for wasm32-unknown-unknown, so it is linted
+      # by the wasm-build job instead of here.
+      - name: Run clippy across the host-target members
+        run: cargo clippy --workspace --exclude strands-web --all-targets -- -D warnings
+
+  test:
+    name: Run workspace tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the cargo registry and build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run the test suite
+        run: cargo test --workspace --exclude strands-web
+
+  wasm-build:
+    name: Build the WASM bundle
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      DIOXUS_CLI_VERSION: "0.7.10"
+      BUNDLE_SIZE_LIMIT_BYTES: "5242880"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain with the wasm target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache the cargo registry and build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install the dioxus CLI
+        run: cargo install dioxus-cli --version "${DIOXUS_CLI_VERSION}" --locked
+
+      - name: Build the release WASM bundle
+        run: dx build --package strands-web --platform web --release
+
+      - name: Locate the bundle and report its size
+        id: bundle
+        run: |
+          PUBLIC_DIR=$(find target/dx -type d -path '*/release/web/public' | head -n1)
+          if [ -z "${PUBLIC_DIR}" ]; then
+            echo "::error::could not locate the dx web bundle under target/dx"
+            exit 1
+          fi
+          BUNDLE_SIZE_BYTES=$(du -sb "${PUBLIC_DIR}" | cut -f1)
+          echo "Bundle directory: ${PUBLIC_DIR}"
+          echo "Bundle size: ${BUNDLE_SIZE_BYTES} bytes"
+          echo "bundle_dir=${PUBLIC_DIR}" >> "${GITHUB_OUTPUT}"
+          echo "bundle_size_bytes=${BUNDLE_SIZE_BYTES}" >> "${GITHUB_OUTPUT}"
+
+      - name: Enforce the bundle size budget
+        env:
+          BUNDLE_SIZE_IN_BYTES: ${{ steps.bundle.outputs.bundle_size_bytes }}
+        run: |
+          if [ "${BUNDLE_SIZE_IN_BYTES}" -gt "${BUNDLE_SIZE_LIMIT_BYTES}" ]; then
+            echo "::error::bundle is ${BUNDLE_SIZE_IN_BYTES} bytes, over the ${BUNDLE_SIZE_LIMIT_BYTES} byte budget"
+            exit 1
+          fi
+
+      - name: Upload the WASM bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: strands-web-wasm-bundle
+          path: ${{ steps.bundle.outputs.bundle_dir }}
+          if-no-files-found: error

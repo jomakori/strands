@@ -1,0 +1,12 @@
+[package]
+name = "strands-web"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+dioxus = { version = "0.7", features = ["web"] }
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
