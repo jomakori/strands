@@ -9,7 +9,8 @@
 use gloo_net::http::{Request, RequestBuilder};
 use serde::de::DeserializeOwned;
 use strands_api_types::{
-    ConnectorSummary, Profile, SearchResult, TagDetail, TagSummary, ThreadDetail, ThreadSummary,
+    ConnectorSummary, GenerateSummaryRequest, Profile, SearchResult, SummaryHistory, SummaryVersion,
+    TagDetail, TagSummary, ThreadDetail, ThreadSummary,
 };
 use uuid::Uuid;
 
@@ -73,6 +74,20 @@ pub async fn list_connectors() -> Result<Vec<ConnectorSummary>, ApiError> {
 /// is the same endpoint the sheet uses before anything has been typed.
 pub async fn search(query: &str) -> Result<Vec<SearchResult>, ApiError> {
     send_json(Request::get("/api/v1/search").query([("q", query)])).await
+}
+
+/// `POST /api/v1/tags/{id}/summary` — generate a summary; `force: true` in the
+/// request is the "regenerate" action, which always mints a new version.
+pub async fn generate_summary(
+    tag_id: Uuid,
+    request: &GenerateSummaryRequest,
+) -> Result<SummaryVersion, ApiError> {
+    send_json(Request::post(&format!("/api/v1/tags/{tag_id}/summary")).json(request)?).await
+}
+
+/// `GET /api/v1/tags/{id}/summary/history` — every version, newest first.
+pub async fn summary_history(tag_id: Uuid) -> Result<SummaryHistory, ApiError> {
+    get_json(&format!("/api/v1/tags/{tag_id}/summary/history")).await
 }
 
 /// Shared GET-and-decode: every endpoint above is a plain GET with a JSON

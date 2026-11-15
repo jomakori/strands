@@ -9,11 +9,13 @@
 mod connector;
 mod me;
 mod search;
+mod summary;
 mod tag;
 mod thread;
 
 pub use connector::{ConnectorStatus, ConnectorSummary};
 pub use me::Profile;
 pub use search::SearchResult;
+pub use summary::{GenerateSummaryRequest, SummaryGuide, SummaryHistory, SummaryVersion};
 pub use tag::{TagDetail, TagSummary};
 pub use thread::{ThreadDetail, ThreadSummary};

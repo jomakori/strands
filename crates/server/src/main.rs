@@ -10,6 +10,7 @@ use strands_server::app::{AppState, router};
 use strands_server::auth::identity::GoogleIdentityProvider;
 use strands_server::config::AuthConfig;
 use strands_server::db;
+use strands_server::summary::LiteLlmSummarizer;
 
 #[tokio::main]
 async fn main() {
@@ -28,6 +29,11 @@ async fn main() {
 
     let registry = build_registry();
 
+    // Same fail-at-boot rule as the identity provider: a missing LiteLLM
+    // config should never pass health checks and fail only on first use.
+    let summarizer =
+        LiteLlmSummarizer::from_env().expect("LITELLM_BASE_URL and LITELLM_MASTER_KEY must be set");
+
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
         .await
         .expect("bind 0.0.0.0:8080");
@@ -38,6 +44,7 @@ async fn main() {
             auth,
             Arc::new(identity),
             Arc::new(registry),
+            Arc::new(summarizer),
         )),
     )
     .await

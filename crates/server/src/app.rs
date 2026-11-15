@@ -20,6 +20,8 @@ use crate::config::AuthConfig;
 use crate::connectors::routes as connector_routes;
 use crate::error::AppError;
 use crate::search::routes as search_routes;
+use crate::summary::Summarizer;
+use crate::summary::handlers::routes as summary_routes;
 
 /// Everything a handler may reach.
 #[derive(Clone)]
@@ -32,6 +34,9 @@ pub struct AppState {
     /// Shared behind an `Arc`: one registry instance for the process, cloned
     /// into every handler's `AppState` for free (T13).
     pub registry: Arc<Registry>,
+    /// `dyn` so production can use LiteLLM and tests a fake that never hits
+    /// the network (ticket T7).
+    pub summarizer: Arc<dyn Summarizer>,
 }
 
 impl AppState {
@@ -40,12 +45,14 @@ impl AppState {
         auth: AuthConfig,
         identity: Arc<dyn IdentityProvider>,
         registry: Arc<Registry>,
+        summarizer: Arc<dyn Summarizer>,
     ) -> Self {
         Self {
             pool,
             auth,
             identity,
             registry,
+            summarizer,
         }
     }
 }
@@ -62,6 +69,7 @@ pub fn router(state: AppState) -> Router {
         .merge(api::routes())
         .merge(connector_routes())
         .merge(search_routes())
+        .merge(summary_routes())
         // Unknown paths answer the same JSON error shape as every handler, so a
         // client parsing `{"error": …}` never meets an HTML body instead.
         .fallback(not_found)
@@ -84,6 +92,7 @@ mod tests {
 
     use crate::auth::identity::BoxFuture;
     use crate::auth::{AuthError, ConsentRequest, Identity};
+    use crate::summary::{SummarizeError, Summarizer};
 
     struct NeverCalled;
 
@@ -102,6 +111,22 @@ mod tests {
         }
     }
 
+    /// Never reached by these router-shape tests: no route here calls the LLM.
+    struct NeverSummarized;
+
+    impl Summarizer for NeverSummarized {
+        fn model_alias(&self) -> &str {
+            "unused"
+        }
+
+        fn summarize<'a>(
+            &'a self,
+            _prompt: &'a str,
+        ) -> crate::summary::BoxFuture<'a, Result<String, SummarizeError>> {
+            Box::pin(async { Err(SummarizeError::Request("never called".into())) })
+        }
+    }
+
     fn test_state() -> AppState {
         AppState::new(
             // Lazy pool: building a router must not require a live database.
@@ -117,6 +142,7 @@ mod tests {
             },
             Arc::new(NeverCalled),
             Arc::new(strands_core::Registry::new()),
+            Arc::new(NeverSummarized),
         )
     }
 

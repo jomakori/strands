@@ -10,6 +10,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 use crate::auth::AuthError;
+use crate::summary::SummarizeError;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -42,6 +43,16 @@ impl From<sqlx::Error> for AppError {
         Self::Internal {
             context: "database",
             source,
+        }
+    }
+}
+
+impl From<SummarizeError> for AppError {
+    fn from(error: SummarizeError) -> Self {
+        eprintln!("strands: summarize failed: {error}");
+        Self::Internal {
+            context: "summarizer",
+            source: sqlx::Error::Protocol(error.to_string()),
         }
     }
 }
