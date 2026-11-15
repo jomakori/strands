@@ -5,31 +5,27 @@
 //! This queries `information_schema` against a live, migrated database —
 //! it is not a hardcoded list of table names, so it fails the moment a new
 //! migration adds a table without `user_id`. It needs a real Postgres
-//! (`DATABASE_URL`), which this host does not have, so it skips cleanly
-//! when that variable is unset rather than failing the whole suite; CI's
+//! (`DATABASE_URL`), which this host does not have; `tests/common/mod.rs`
+//! describes when the test skips and when a missing database is fatal. CI's
 //! `schema` job (.github/workflows/lint-test.yml) provides a postgres:17
 //! service container and sets `DATABASE_URL` so this assertion actually runs.
 
-use strands_server::db;
+mod common;
 
 #[tokio::test]
 async fn every_user_scoped_table_has_a_user_id_column_or_db_unset_skip() {
-    let Ok(database_url) = std::env::var("DATABASE_URL") else {
-        eprintln!(
-            "skipping every_user_scoped_table_has_a_user_id_column_or_db_unset_skip: \
-             DATABASE_URL is not set (no live Postgres on this host)"
-        );
+    let Some(pool) = common::connect("every_user_scoped_table_has_a_user_id_column").await else {
         return;
     };
-
-    let pool = db::connect_and_migrate(&database_url)
-        .await
-        .expect("connect to Postgres and apply migrations");
 
     // Not "user-scoped" by design, not by omission:
     // - `users` is the identity root; its own primary key *is* the user id.
     // - `_sqlx_migrations` is sqlx's own bookkeeping table, not domain data.
-    const NOT_USER_SCOPED: &[&str] = &["users", "_sqlx_migrations"];
+    // - `oauth_requests` is the pre-authentication half of the login flow
+    //   (migration 0002): the callback that reads it has no user yet, so the row
+    //   cannot carry a `user_id`. It is keyed by an unguessable single-use
+    //   `state` token, expires in 10 minutes, and is deleted as it is read.
+    const NOT_USER_SCOPED: &[&str] = &["users", "_sqlx_migrations", "oauth_requests"];
 
     let tables: Vec<String> = sqlx::query_scalar(
         "SELECT table_name FROM information_schema.tables \
