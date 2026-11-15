@@ -10,8 +10,9 @@ use gloo_net::http::{Request, RequestBuilder};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use strands_api_types::{
-    ConnectorSummary, GenerateSummaryRequest, Profile, SearchResult, SummaryHistory,
-    SummaryVersion, TagDetail, TagSummary, ThreadDetail, ThreadSummary,
+    CategorySummary, ConnectorSummary, GenerateSummaryRequest, NewTag, NewThread, Profile,
+    SearchResult, SummaryHistory, SummaryVersion, TagDetail, TagSummary, ThreadDetail,
+    ThreadSummary,
 };
 use uuid::Uuid;
 
@@ -91,6 +92,33 @@ pub async fn summary_history(tag_id: Uuid) -> Result<SummaryHistory, ApiError> {
     get_json(&format!("/api/v1/tags/{tag_id}/summary/history")).await
 }
 
+/// `GET /api/v1/categories` — the caller's own categories, in seed order. Quick capture
+/// needs a `category_id` before it can file a brand-new tag.
+pub async fn list_categories() -> Result<Vec<CategorySummary>, ApiError> {
+    get_json("/api/v1/categories").await
+}
+
+/// `POST /api/v1/tags` — create a tag under one of the caller's categories. A foreign or
+/// unknown category answers [`ApiError::Status`]`(404)`.
+pub async fn create_tag(name: &str, category_id: Uuid) -> Result<TagSummary, ApiError> {
+    let body = NewTag {
+        name: name.to_owned(),
+        category_id,
+    };
+    post_json("/api/v1/tags", &body).await
+}
+
+/// `POST /api/v1/threads` — capture one note. `tag_id: None` files it in the caller's inbox;
+/// a foreign tag id answers [`ApiError::Status`]`(404)`.
+pub async fn create_thread(body: &str, tag_id: Option<Uuid>) -> Result<ThreadDetail, ApiError> {
+    let body = NewThread {
+        body: body.to_owned(),
+        tag_id,
+    };
+    post_json("/api/v1/threads", &body).await
+}
+}
+
 /// Shared GET-and-decode: every endpoint above is a plain GET with a JSON
 /// body, so the per-call code is just the path and the target type.
 async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
@@ -109,6 +137,16 @@ async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, Ap
 
 /// One response body into `T`, mapping a non-2xx answer to `Status`.
 async fn decode<T: DeserializeOwned>(response: gloo_net::http::Response) -> Result<T, ApiError> {
+    if !response.ok() {
+        return Err(ApiError::Status(response.status()));
+    }
+    Ok(response.json().await?)
+}
+
+/// Shared POST-and-decode: send the DTO as the JSON body and decode the answer into the
+/// response type. Same error split as [`get_json`] — transport failure versus a refusal.
+async fn post_json<T: DeserializeOwned>(path: &str, body: &impl Serialize) -> Result<T, ApiError> {
+    let response = Request::post(path).json(body)?.send().await?;
     if !response.ok() {
         return Err(ApiError::Status(response.status()));
     }

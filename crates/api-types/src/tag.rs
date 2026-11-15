@@ -26,9 +26,30 @@ pub struct TagDetail {
     pub created_at: DateTime<Utc>,
 }
 
+/// Body of `POST /api/v1/tags` — a tag created from quick capture (T12).
+///
+/// `category_id` must be one of the caller's own categories; a foreign or
+/// unknown id answers 404, the same as an unknown tag id does elsewhere.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewTag {
+    pub name: String,
+    pub category_id: Uuid,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_tag_round_trips_through_json() {
+        let request = NewTag {
+            name: "Kyoto".to_owned(),
+            category_id: Uuid::nil(),
+        };
+        let json = serde_json::to_string(&request).expect("serialize");
+        let back: NewTag = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(request, back);
+    }
 
     #[test]
     fn tag_summary_round_trips_through_json() {

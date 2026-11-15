@@ -10,13 +10,15 @@ use uuid::Uuid;
 
 use crate::api;
 use crate::data::{self, Tag, ThreadPreview};
-use crate::home::CatGlyph;
+use crate::home::{CatGlyph, Grid};
 use crate::routes::Route;
 
 /// The whole detail screen: a back link, the tag card, and the path stack.
 #[component]
 pub fn TagDetail(tag_id: String) -> Element {
-    let tag = data::find_tag(&tag_id);
+    // Same grid the home surface renders, so a just-captured note is already in its tag.
+    let grid = use_context::<Grid>().0;
+    let tag = data::find_tag(&grid(), &tag_id);
 
     rsx! {
         div { class: "app",
@@ -68,7 +70,7 @@ fn DetailCard(tag: Tag) -> Element {
         SummaryCard { tag_id: tag.id.to_string() }
         div { class: "path-stack", id: "path-stack", role: "list", "aria-label": "Threads",
             for thread in tag.threads.iter() {
-                PathEntry { key: "{thread.title}", tag, thread: *thread }
+                PathEntry { key: "{thread.id}", tag: tag.clone(), thread: thread.clone() }
             }
         }
     }
