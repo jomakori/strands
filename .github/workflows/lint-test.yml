@@ -117,7 +117,20 @@ jobs:
         run: sqlx migrate run --source migrations
 
       - name: Run the schema-shape acceptance test
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test schema_shape
+
+      # Ticket T3: the isolation rules need a real database, so they run against
+      # the same postgres:17 service as the schema check. They drive the real
+      # router through the real login flow with a fake identity provider in
+      # place of Google's network calls.
+      - name: Run the auth isolation acceptance test
+        # STRANDS_TEST_REQUIRE_DB makes an unreachable database a failure rather
+        # than a skip — CI promises Postgres here, so a skip must not pass.
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --test auth_isolation
 
   wasm-build:
     name: Build the WASM bundle
