@@ -6,8 +6,10 @@
 //! where the fields happen to coincide today: the two contracts are free to
 //! diverge later without a rename ripping through both crates.
 
+mod me;
 mod tag;
 mod thread;
 
+pub use me::Profile;
 pub use tag::{TagDetail, TagSummary};
 pub use thread::{ThreadDetail, ThreadSummary};

@@ -8,7 +8,7 @@
 
 use gloo_net::http::Request;
 use serde::de::DeserializeOwned;
-use strands_api_types::{TagDetail, TagSummary, ThreadDetail, ThreadSummary};
+use strands_api_types::{Profile, TagDetail, TagSummary, ThreadDetail, ThreadSummary};
 use uuid::Uuid;
 
 /// Failure modes a caller must handle: the request/parse itself failed, or
@@ -34,6 +34,11 @@ impl From<gloo_net::Error> for ApiError {
     fn from(error: gloo_net::Error) -> Self {
         Self::Network(error)
     }
+}
+
+/// `GET /api/v1/me` — the signed-in user, or [`ApiError::Status`]`(401)`.
+pub async fn me() -> Result<Profile, ApiError> {
+    get_json("/api/v1/me").await
 }
 
 /// `GET /api/v1/tags` — every tag the caller owns.

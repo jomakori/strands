@@ -47,7 +47,15 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .merge(auth_routes())
         .merge(api::routes())
+        // Unknown paths answer the same JSON error shape as every handler, so a
+        // client parsing `{"error": …}` never meets an HTML body instead.
+        .fallback(not_found)
         .with_state(state)
+}
+
+/// Fallback for any path no route claimed: JSON 404, never an HTML error page.
+async fn not_found() -> AppError {
+    AppError::NotFound
 }
 
 #[cfg(test)]
@@ -155,5 +163,23 @@ mod tests {
                 .is_some(),
             "logout always clears the cookie"
         );
+    }
+
+    #[tokio::test]
+    async fn unknown_paths_answer_a_json_404_not_html() {
+        let response = router(test_state())
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/nope")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body, json!({ "error": "not found" }));
     }
 }

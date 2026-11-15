@@ -12,8 +12,7 @@ use axum::extract::rejection::PathRejection;
 use axum::extract::{Path, State};
 use axum::routing::get;
 use chrono::{DateTime, Utc};
-use serde_json::{Value, json};
-use strands_api_types::{TagDetail, TagSummary, ThreadDetail, ThreadSummary};
+use strands_api_types::{Profile, TagDetail, TagSummary, ThreadDetail, ThreadSummary};
 use uuid::Uuid;
 
 use crate::app::AppState;
@@ -31,19 +30,19 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// The signed-in user's own profile.
-pub async fn me(State(state): State<AppState>, user: CurrentUser) -> Result<Json<Value>, AppError> {
+pub async fn me(State(state): State<AppState>, user: CurrentUser) -> Result<Json<Profile>, AppError> {
     let profile = store::find_profile(&state.pool, user.id)
         .await?
         // The session points at a user that is gone (deleted between the
         // extractor and this query): treat it as signed out.
         .ok_or(AppError::Unauthenticated)?;
 
-    Ok(Json(json!({
-        "id": profile.id,
-        "email": profile.email,
-        "name": profile.name,
-        "avatar_url": profile.avatar_url,
-    })))
+    Ok(Json(Profile {
+        id: profile.id,
+        email: profile.email,
+        name: profile.name,
+        avatar_url: profile.avatar_url,
+    }))
 }
 
 /// Every tag the caller owns, most recently created first.
