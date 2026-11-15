@@ -8,7 +8,7 @@ use crate::{Source, ValidationError};
 /// Longest body a person can type in one capture (T12: 5000 characters).
 ///
 /// Mirrors the `notes_manual_body_length` constraint added in
-/// `migrations/0004_notes_body_limit.sql`: the handler answers 400, the
+/// `migrations/0005_notes_body_limit.sql`: the handler answers 400, the
 /// constraint makes that the only thing the table can hold.
 pub const MAX_BODY_CHARS: usize = 5000;
 
