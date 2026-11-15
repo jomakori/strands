@@ -30,7 +30,10 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// The signed-in user's own profile.
-pub async fn me(State(state): State<AppState>, user: CurrentUser) -> Result<Json<Profile>, AppError> {
+pub async fn me(
+    State(state): State<AppState>,
+    user: CurrentUser,
+) -> Result<Json<Profile>, AppError> {
     let profile = store::find_profile(&state.pool, user.id)
         .await?
         // The session points at a user that is gone (deleted between the

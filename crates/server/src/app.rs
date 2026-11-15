@@ -16,6 +16,7 @@ use crate::api;
 use crate::auth::IdentityProvider;
 use crate::auth::routes::routes as auth_routes;
 use crate::config::AuthConfig;
+use crate::error::AppError;
 
 /// Everything a handler may reach.
 #[derive(Clone)]
