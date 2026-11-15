@@ -1,16 +1,20 @@
 //! Origin of a note: manual capture or an import connector (see spec §6 D10).
 
 use serde::{Deserialize, Serialize};
+use sqlx::Type;
 
-/// Where a note's content came from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Where a note's content came from. Mirrors the `note_source` Postgres enum
+/// in `migrations/0001_init.sql` (spec §6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Type)]
 #[serde(rename_all = "snake_case")]
+#[sqlx(type_name = "note_source", rename_all = "snake_case")]
 pub enum Source {
     /// Typed directly by the user (quick capture, D9).
     Manual,
     /// Imported via the Google Photos Picker connector.
     GooglePhotos,
     /// Imported via the WhatsApp bridge connector.
+    #[sqlx(rename = "whatsapp")]
     WhatsApp,
     /// Imported via the Google Maps file-ingest connector.
     GoogleMaps,
