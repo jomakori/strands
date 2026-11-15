@@ -78,6 +78,47 @@ jobs:
       - name: Run the test suite
         run: cargo test --workspace --exclude strands-web
 
+  schema:
+    name: Verify migrations and user_id scoping on a clean DB
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd=pg_isready
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install the pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache the cargo registry and build output
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version "^0.8" --no-default-features --features postgres,rustls --locked
+
+      - name: Run sqlx migrate run on a clean database
+        run: sqlx migrate run --source migrations
+
+      - name: Run the schema-shape acceptance test
+        run: cargo test --package strands-server --test schema_shape
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest

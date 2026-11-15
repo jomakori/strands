@@ -5,7 +5,9 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
+sqlx = { version = "0.8", default-features = false, features = ["derive", "postgres"] }
 thiserror = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 

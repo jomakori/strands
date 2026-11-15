@@ -1,7 +1,10 @@
-//! Strands server binary: axum router, health check (spec §6 — one deployable).
+//! Strands server binary: axum router, health check, schema migrations on
+//! boot (spec §6 — one deployable; spec §9.4 — Postgres is a hard runtime
+//! dependency and migrations run on deploy).
 
 use axum::{Json, Router, routing::get};
 use serde_json::{Value, json};
+use strands_server::db;
 
 /// Build the router. Split out so tests can exercise it without binding a socket.
 fn app() -> Router {
@@ -15,6 +18,11 @@ async fn healthz() -> Json<Value> {
 
 #[tokio::main]
 async fn main() {
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    db::connect_and_migrate(&database_url)
+        .await
+        .expect("connect to Postgres and apply migrations");
+
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
         .await
         .expect("bind 0.0.0.0:8080");
