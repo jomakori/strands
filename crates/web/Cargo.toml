@@ -6,6 +6,8 @@ publish.workspace = true
 
 [dependencies]
 dioxus = { version = "0.7", features = ["web", "router"] }
+gloo-net = "0.6"
+strands-api-types = { path = "../api-types" }
 
 [features]
 default = ["web"]
