@@ -5,6 +5,7 @@ mod data;
 mod detail;
 mod home;
 mod routes;
+mod search;
 mod settings;
 
 use dioxus::prelude::*;

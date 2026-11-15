@@ -225,6 +225,44 @@ impl Harness {
         tag_id
     }
 
+    /// Insert a thread under a tag with one note filed under it, and return the
+    /// thread id. Search ranks a note's body, so the body is the interesting part:
+    /// the title deliberately need not contain the searched word.
+    async fn create_thread_with_note(
+        &self,
+        user_id: UserId,
+        tag_id: Uuid,
+        title: &str,
+        body: &str,
+    ) -> Uuid {
+        let thread_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO threads (id, user_id, tag_id, title) VALUES ($1, $2, $3, $4)")
+            .bind(thread_id)
+            .bind(user_id)
+            .bind(tag_id)
+            .bind(title)
+            .execute(&self.pool)
+            .await
+            .expect("insert thread");
+
+        let note_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO notes (id, user_id, tag_id, thread_id, kind, body, occurred_at, source, dedupe_key) \
+             VALUES ($1, $2, $3, $4, 'text', $5, now(), 'manual', $6)",
+        )
+        .bind(note_id)
+        .bind(user_id)
+        .bind(tag_id)
+        .bind(thread_id)
+        .bind(body)
+        .bind(format!("test-{note_id}"))
+        .execute(&self.pool)
+        .await
+        .expect("insert note");
+
+        thread_id
+    }
+
     /// Insert a session row that is already past its expiry.
     async fn create_expired_session(&self, user_id: UserId) -> String {
         let session_id = Uuid::new_v4();
@@ -497,4 +535,152 @@ async fn logout_revokes_the_session() {
         .await
         .unwrap();
     assert_eq!(users, 1, "repeated logins reuse the same users row");
+}
+
+/// Ticket T11 acceptance: "a query matching one note returns it with its tag", and
+/// the search never crosses users — matching a note here means matching the note's
+/// *body*, which is why the titles below deliberately avoid the searched word.
+#[tokio::test]
+async fn search_matches_a_note_with_its_tag_and_never_crosses_users() {
+    let Some(harness) =
+        Harness::connect("search_matches_a_note_with_its_tag_and_never_crosses_users").await
+    else {
+        return;
+    };
+
+    let alice_cookie = harness.login("alice").await;
+    let bob_cookie = harness.login("bob").await;
+    let alice_id = harness.user_id(&alice_cookie).await;
+    let bob_id = harness.user_id(&bob_cookie).await;
+
+    let alice_tag = harness.create_tag(alice_id, "alice-search").await;
+    let bob_tag = harness.create_tag(bob_id, "bob-search").await;
+
+    let alice_thread = harness
+        .create_thread_with_note(
+            alice_id,
+            alice_tag,
+            "Market morning",
+            "the kumquat stall opened at dawn",
+        )
+        .await;
+    let bob_thread = harness
+        .create_thread_with_note(
+            bob_id,
+            bob_tag,
+            "Unrelated errand",
+            "a kumquat turned up in the wrong basket",
+        )
+        .await;
+    // Alice only: a word Bob's data never contains.
+    harness
+        .create_thread_with_note(
+            alice_id,
+            alice_tag,
+            "Sour things",
+            "rhubarb needs sugar, not salt",
+        )
+        .await;
+
+    // Acceptance: one matching note ⇒ its thread, with the tag it lives under.
+    let (status, _, body) = harness
+        .get("/api/v1/search?q=kumquat", Some(&alice_cookie))
+        .await;
+    assert_eq!(status, StatusCode::OK, "search status: {body}");
+    let rows = body.as_array().expect("search answers an array");
+    assert_eq!(rows.len(), 1, "one note matched, one row: {body}");
+    assert_eq!(rows[0]["id"], alice_thread.to_string().as_str());
+    assert_eq!(rows[0]["tag_id"], alice_tag.to_string().as_str());
+    assert_eq!(rows[0]["tag_name"], "alice-search");
+    assert_eq!(rows[0]["title"], "Market morning");
+    assert!(
+        rows[0]["snippet"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("kumquat"),
+        "the snippet comes from the matching note: {body}"
+    );
+    assert!(
+        !rows[0]["snippet"]
+            .as_str()
+            .unwrap_or_default()
+            .contains('<'),
+        "the snippet is plain text, not markup: {body}"
+    );
+
+    // Same word, Bob's dataset: his thread only, never Alice's.
+    let (status, _, body) = harness
+        .get("/api/v1/search?q=kumquat", Some(&bob_cookie))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("search answers an array");
+    assert_eq!(rows.len(), 1, "bob sees only his own match: {body}");
+    assert_eq!(rows[0]["id"], bob_thread.to_string().as_str());
+    assert_eq!(rows[0]["tag_name"], "bob-search");
+    assert!(
+        !body.to_string().contains(&alice_thread.to_string()),
+        "another user's thread must never surface: {body}"
+    );
+
+    // A word that only exists in Alice's notes matches nothing for Bob.
+    let (status, _, body) = harness
+        .get("/api/v1/search?q=rhubarb", Some(&bob_cookie))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.as_array().map(Vec::len),
+        Some(0),
+        "alice's note leaked into bob's search: {body}"
+    );
+
+    // The generated tsvector covers the title as well as the body, so a thread whose
+    // title is the only match still comes back.
+    harness
+        .create_thread_with_note(alice_id, alice_tag, "Apricot ledger", "receipts filed")
+        .await;
+    let (status, _, body) = harness
+        .get("/api/v1/search?q=apricot", Some(&alice_cookie))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("search answers an array");
+    assert_eq!(rows.len(), 1, "title-only match returns its thread: {body}");
+    assert_eq!(rows[0]["title"], "Apricot ledger");
+    assert_eq!(rows[0]["tag_name"], "alice-search");
+
+    // Ranked answers are capped at 20 even when more notes match.
+    for index in 0..25 {
+        harness
+            .create_thread_with_note(
+                alice_id,
+                alice_tag,
+                &format!("Zephyr note {index:02}"),
+                &format!("zephyr payload {index:02}"),
+            )
+            .await;
+    }
+    let (status, _, body) = harness
+        .get("/api/v1/search?q=zephyr", Some(&alice_cookie))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.as_array().map(Vec::len),
+        Some(20),
+        "results are capped at 20: {body}"
+    );
+
+    // An empty query answers recents — the caller's own threads, never the other user's.
+    let (status, _, body) = harness.get("/api/v1/search?q=", Some(&alice_cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("recents answer an array");
+    assert!(!rows.is_empty(), "alice has threads: {body}");
+    assert!(rows.len() <= 5, "recents are capped at 5: {body}");
+    assert!(
+        !body.to_string().contains(&bob_thread.to_string()),
+        "recents leaked another user's thread: {body}"
+    );
+
+    // No cookie, no results.
+    let (status, _, body) = harness.get("/api/v1/search?q=kumquat", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(body["error"], "authentication required");
 }

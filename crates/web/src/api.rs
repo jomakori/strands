@@ -6,10 +6,10 @@
 //! shared `strands-api-types` DTO. Same-origin `fetch` sends the session
 //! cookie automatically, so there is no credentials wiring to do here.
 
-use gloo_net::http::Request;
+use gloo_net::http::{Request, RequestBuilder};
 use serde::de::DeserializeOwned;
 use strands_api_types::{
-    ConnectorSummary, Profile, TagDetail, TagSummary, ThreadDetail, ThreadSummary,
+    ConnectorSummary, Profile, SearchResult, TagDetail, TagSummary, ThreadDetail, ThreadSummary,
 };
 use uuid::Uuid;
 
@@ -68,10 +68,22 @@ pub async fn list_connectors() -> Result<Vec<ConnectorSummary>, ApiError> {
     get_json("/api/v1/connectors").await
 }
 
+/// `GET /api/v1/search?q=` — the caller's threads matching `query` by title or note
+/// body, best match first. A blank `query` asks for the recent threads instead, which
+/// is the same endpoint the sheet uses before anything has been typed.
+pub async fn search(query: &str) -> Result<Vec<SearchResult>, ApiError> {
+    send_json(Request::get("/api/v1/search").query([("q", query)])).await
+}
+
 /// Shared GET-and-decode: every endpoint above is a plain GET with a JSON
 /// body, so the per-call code is just the path and the target type.
 async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
-    let response = Request::get(path).send().await?;
+    send_json(Request::get(path)).await
+}
+
+/// Decode one prepared request's JSON body, mapping a non-2xx answer to `Status`.
+async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, ApiError> {
+    let response = request.send().await?;
     if !response.ok() {
         return Err(ApiError::Status(response.status()));
     }

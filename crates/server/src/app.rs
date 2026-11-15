@@ -19,6 +19,7 @@ use crate::auth::routes::routes as auth_routes;
 use crate::config::AuthConfig;
 use crate::connectors::routes as connector_routes;
 use crate::error::AppError;
+use crate::search::routes as search_routes;
 
 /// Everything a handler may reach.
 #[derive(Clone)]
@@ -60,6 +61,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth_routes())
         .merge(api::routes())
         .merge(connector_routes())
+        .merge(search_routes())
         // Unknown paths answer the same JSON error shape as every handler, so a
         // client parsing `{"error": …}` never meets an HTML body instead.
         .fallback(not_found)
@@ -145,6 +147,7 @@ mod tests {
         for uri in [
             "/api/v1/me",
             "/api/v1/tags/00000000-0000-0000-0000-000000000001",
+            "/api/v1/search?q=anything",
         ] {
             let response = router(test_state())
                 .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())

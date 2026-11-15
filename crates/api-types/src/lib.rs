@@ -8,10 +8,12 @@
 
 mod connector;
 mod me;
+mod search;
 mod tag;
 mod thread;
 
 pub use connector::{ConnectorStatus, ConnectorSummary};
 pub use me::Profile;
+pub use search::SearchResult;
 pub use tag::{TagDetail, TagSummary};
 pub use thread::{ThreadDetail, ThreadSummary};
