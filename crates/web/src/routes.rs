@@ -8,10 +8,14 @@ use dioxus::prelude::*;
 
 use crate::detail::TagDetail;
 use crate::home::HomeView;
+use crate::search::SearchSheet;
 use crate::settings::Settings;
 
 #[derive(Clone, Debug, PartialEq, Routable)]
 pub enum Route {
+    // Every route renders inside the one shell layout, which is what lets the search
+    // sheet and its `'/'` binding exist once for the whole app.
+    #[layout(Shell)]
     #[route("/")]
     HomeView {},
 
@@ -20,4 +24,13 @@ pub enum Route {
 
     #[route("/settings")]
     Settings {},
+}
+
+/// App shell: the active route, plus the search overlay every route shares.
+#[component]
+pub fn Shell() -> Element {
+    rsx! {
+        Outlet::<Route> {}
+        SearchSheet {}
+    }
 }
