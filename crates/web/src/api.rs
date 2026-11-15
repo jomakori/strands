@@ -117,7 +117,6 @@ pub async fn create_thread(body: &str, tag_id: Option<Uuid>) -> Result<ThreadDet
     };
     post_json("/api/v1/threads", &body).await
 }
-}
 
 /// Shared GET-and-decode: every endpoint above is a plain GET with a JSON
 /// body, so the per-call code is just the path and the target type.
@@ -137,16 +136,6 @@ async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, Ap
 
 /// One response body into `T`, mapping a non-2xx answer to `Status`.
 async fn decode<T: DeserializeOwned>(response: gloo_net::http::Response) -> Result<T, ApiError> {
-    if !response.ok() {
-        return Err(ApiError::Status(response.status()));
-    }
-    Ok(response.json().await?)
-}
-
-/// Shared POST-and-decode: send the DTO as the JSON body and decode the answer into the
-/// response type. Same error split as [`get_json`] — transport failure versus a refusal.
-async fn post_json<T: DeserializeOwned>(path: &str, body: &impl Serialize) -> Result<T, ApiError> {
-    let response = Request::post(path).json(body)?.send().await?;
     if !response.ok() {
         return Err(ApiError::Status(response.status()));
     }

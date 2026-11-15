@@ -25,6 +25,7 @@ use strands_server::app::{AppState, router};
 use strands_server::auth::identity::BoxFuture;
 use strands_server::auth::{AuthError, Identity, IdentityProvider, store};
 use strands_server::config::AuthConfig;
+use strands_server::summary::{BoxFuture as SummarizeBoxFuture, SummarizeError, Summarizer};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -34,6 +35,22 @@ struct Harness {
     app: Router,
     pool: PgPool,
     run: String,
+}
+
+/// No capture path summarizes; a request here would mean the wrong code ran.
+struct UnusedSummarizer;
+
+impl Summarizer for UnusedSummarizer {
+    fn model_alias(&self) -> &str {
+        "unused"
+    }
+
+    fn summarize<'a>(
+        &'a self,
+        _prompt: &'a str,
+    ) -> SummarizeBoxFuture<'a, Result<String, SummarizeError>> {
+        Box::pin(async { Err(SummarizeError::Request("never called".into())) })
+    }
 }
 
 impl Harness {
@@ -57,6 +74,7 @@ impl Harness {
             // The capture endpoints never touch the provider: any stub will do.
             std::sync::Arc::new(UnusedProvider),
             std::sync::Arc::new(strands_core::Registry::new()),
+            std::sync::Arc::new(UnusedSummarizer),
         ));
 
         Some(Self { app, pool, run })
