@@ -7,6 +7,8 @@ use thiserror::Error;
 pub enum ValidationError {
     #[error("body must not be empty")]
     EmptyBody,
+    #[error("body must not exceed {max} characters")]
+    BodyTooLong { max: usize },
     #[error("name must not be empty")]
     EmptyName,
 }

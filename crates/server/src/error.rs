@@ -47,6 +47,12 @@ impl From<sqlx::Error> for AppError {
     }
 }
 
+impl From<strands_core::ValidationError> for AppError {
+    fn from(error: strands_core::ValidationError) -> Self {
+        Self::BadRequest(error.to_string())
+    }
+}
+
 impl From<SummarizeError> for AppError {
     fn from(error: SummarizeError) -> Self {
         eprintln!("strands: summarize failed: {error}");

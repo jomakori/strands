@@ -2,21 +2,27 @@
 //!
 //! Filtering is component state only — pressing a chip recomputes the visible set and the
 //! grid re-renders in place. No navigation, no reload, no server round trip (spec §7.1).
+//!
+//! The grid itself lives in a context signal (provided by `App`) so quick capture (T12) can
+//! insert a note optimistically and have the grid show it on the way back.
 
 use dioxus::prelude::*;
 
 use crate::data::{self, Category, Tag};
 use crate::routes::Route;
 
-/// The whole home screen. Reads the grid through [`data::load_home`], so the seeded fixture
-/// and the future typed client are interchangeable here.
+/// The grid every surface reads: the app provides it once, capture mutates it, home renders it.
+#[derive(Clone, Copy)]
+pub struct Grid(pub Signal<Vec<Tag>>);
+
+/// The whole home screen. Reads the grid through the context signal, so a note captured on
+/// the capture screen is already in the list when the user comes back.
 #[component]
 pub fn HomeView() -> Element {
-    // Recomputed per render on purpose: 16 tags is cheaper than the bookkeeping a memo would
-    // need, and it keeps the filter path a plain function call.
-    let all = data::load_home();
+    let grid = use_context::<Grid>().0;
     let active = use_signal(Vec::<Category>::new);
 
+    let all = grid();
     let shown = data::visible(&all, &active());
     let counts = data::counts(&shown);
     let tags_label = data::tag_plural(counts.tags);
@@ -64,6 +70,12 @@ pub fn HomeView() -> Element {
                         }
                     }
                 }
+                Link {
+                    class: "capture-cta",
+                    to: Route::Capture {},
+                    "data-testid": "capture-open",
+                    "New note"
+                }
             }
             main { class: "feed", "aria-label": "Strands feed",
                 div { class: "feed-inner",
@@ -82,7 +94,7 @@ pub fn HomeView() -> Element {
                     }
                     div { class: "grid", id: "grid",
                         for tag in shown.iter() {
-                            TagCard { key: "{tag.id}", tag: *tag }
+                            TagCard { key: "{tag.id}", tag: tag.clone() }
                         }
                     }
                 }
@@ -126,7 +138,7 @@ fn TagCard(tag: Tag) -> Element {
         Link {
             class: "tag",
             style: "--cat: {tag.category.accent()}; --glow: {glow:.2};",
-            "data-tag-id": tag.id,
+            "data-tag-id": tag.id.clone(),
             "data-cat": tag.category.key(),
             to: Route::TagDetail { tag_id: tag.id.to_string() },
             div { class: "cat-row",

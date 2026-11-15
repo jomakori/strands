@@ -1,6 +1,7 @@
 //! Strands web SPA entrypoint — Dioxus 0.7, web-only build, no SSR (spec D1).
 
 mod api;
+mod capture;
 mod data;
 mod detail;
 mod home;
@@ -10,6 +11,7 @@ mod settings;
 
 use dioxus::prelude::*;
 
+use home::Grid;
 use routes::Route;
 
 /// Styles ship inside the bundle: one artifact, no extra request, no external host. The
@@ -22,8 +24,14 @@ fn main() {
 
 /// App shell: document head, then the router. Selecting a tag from the grid pushes
 /// `/tags/:id` (T6); the browser's back action returns to the grid.
+///
+/// The grid signal is provided here, above the router, so it survives route changes: a note
+/// captured at `/capture` is already in the list when the user lands back on `/`.
 #[component]
 fn App() -> Element {
+    let grid = use_signal(data::load_home);
+    use_context_provider(|| Grid(grid));
+
     rsx! {
         document::Meta {
             name: "viewport",

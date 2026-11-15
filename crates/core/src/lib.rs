@@ -18,7 +18,7 @@ pub use ids::{
     CategoryId, ConnectorId, ImportRunId, JobId, LinkId, ListId, NoteId, PlaceId, SessionId,
     SummaryId, TagId, ThreadId, UserId,
 };
-pub use note::Note;
+pub use note::{MAX_BODY_CHARS, Note};
 pub use source::Source;
 pub use tag::Tag;
 pub use timestamp::Timestamp;

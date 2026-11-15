@@ -1,12 +1,15 @@
 //! The web client's only door to data (architecture §6: every read goes through one module).
 //!
-//! T4 lands the typed HTTP client; until it does, [`load_home`] returns a seeded fixture
-//! shaped like the `GET /api/v1/tags` projection the grid will consume: 16 tags across the
-//! five categories, each with its thread count and up to three thread previews. Swapping the
-//! source is then a change to this file alone — the views render [`Tag`] either way.
+//! [`load_home`] returns a seeded fixture shaped like the `GET /api/v1/tags` projection the
+//! grid will consume: 16 tags across the five categories, each with its thread count and up
+//! to three thread previews. T4 landed the typed client; swapping the source for a network
+//! read is a change to this file alone — the views render [`Tag`] either way.
 //!
 //! The types live here, not in `strands-core`: this is the client-side view model. The wire
 //! types arrive with the client and get mapped into these.
+//!
+//! Rows are owned rather than `&'static` because quick capture (T12) inserts a note into the
+//! grid before the server answers, then rewrites it with the server's row.
 
 /// The five fixed categories (spec §4). Order here is the chip order on the home surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -84,23 +87,37 @@ impl Category {
 }
 
 /// One preview line on a card: a thread and how long ago it last moved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadPreview {
-    pub title: &'static str,
+    /// Thread id. A capture that has not been answered yet carries a `local-…` id, which
+    /// is what reconciliation replaces.
+    pub id: String,
+    pub title: String,
     /// Age in minutes at render time; the view formats it (see [`relative`]).
     pub age_minutes: u32,
 }
 
+impl ThreadPreview {
+    /// A preview of a just-captured note: no server round trip yet.
+    pub fn captured(id: String, title: String) -> Self {
+        Self {
+            id,
+            title,
+            age_minutes: 0,
+        }
+    }
+}
+
 /// A tag as the home grid needs it: identity, category, how many threads it holds, and the
 /// few most recent previews. A card shows at least one preview, or its count when it has none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tag {
-    pub id: &'static str,
-    pub name: &'static str,
+    pub id: String,
+    pub name: String,
     pub category: Category,
     /// Total threads, not just the previews carried here.
     pub thread_count: u32,
-    pub threads: &'static [ThreadPreview],
+    pub threads: Vec<ThreadPreview>,
 }
 
 /// Header totals for the current view.
@@ -112,18 +129,34 @@ pub struct Counts {
 
 /// Read the home grid. Returns tags most-recently-active first (spec §7.1 grid ordering).
 ///
-/// Seeded until the typed client lands; the signature already returns an owned `Vec` so the
+/// Seeded until the grid reads the API; the signature already returns an owned `Vec` so the
 /// swap to a network call does not churn the caller.
 pub fn load_home() -> Vec<Tag> {
-    let mut tags = SEED.to_vec();
+    let mut tags: Vec<Tag> = SEED
+        .iter()
+        .map(|(id, name, category, thread_count, threads)| Tag {
+            id: (*id).to_owned(),
+            name: (*name).to_owned(),
+            category: *category,
+            thread_count: *thread_count,
+            threads: threads
+                .iter()
+                .map(|(title, age_minutes)| ThreadPreview {
+                    id: format!("{id}-{}", title.len()),
+                    title: (*title).to_owned(),
+                    age_minutes: *age_minutes,
+                })
+                .collect(),
+        })
+        .collect();
     tags.sort_by_key(latest_activity);
     tags
 }
 
 /// Look up one tag by id for the detail view. `None` when the id does not match any seed —
 /// the view renders a "not found" state rather than unwrapping.
-pub fn find_tag(tag_id: &str) -> Option<Tag> {
-    SEED.iter().find(|tag| tag.id == tag_id).copied()
+pub fn find_tag(tags: &[Tag], tag_id: &str) -> Option<Tag> {
+    tags.iter().find(|tag| tag.id == tag_id).cloned()
 }
 
 /// Breadcrumb segments for one thread in a tag's path stack: category, tag, thread title.
@@ -140,7 +173,7 @@ pub fn thread_path(tag: &Tag, thread: &ThreadPreview) -> Vec<String> {
 pub fn visible(tags: &[Tag], active: &[Category]) -> Vec<Tag> {
     tags.iter()
         .filter(|tag| active.is_empty() || active.contains(&tag.category))
-        .copied()
+        .cloned()
         .collect()
 }
 
@@ -149,6 +182,106 @@ pub fn counts(tags: &[Tag]) -> Counts {
     Counts {
         tags: tags.len(),
         threads: tags.iter().map(|tag| tag.thread_count).sum(),
+    }
+}
+
+/// One captured note placed in the grid before the server has answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Capture {
+    /// Thread id the grid uses until the server names one.
+    pub local_id: String,
+    pub tag_name: String,
+    pub category: Category,
+    pub title: String,
+}
+
+/// Put a capture at the top of the grid: prepend its preview to the tag's card, or add the
+/// card when the tag is new. The note is visible on the next render, without a round trip.
+pub fn insert_capture(tags: &mut Vec<Tag>, capture: &Capture) {
+    let preview = ThreadPreview::captured(capture.local_id.clone(), capture.title.clone());
+
+    match tags
+        .iter_mut()
+        .find(|tag| tag.name.eq_ignore_ascii_case(&capture.tag_name))
+    {
+        Some(tag) => {
+            tag.threads.insert(0, preview);
+            tag.thread_count += 1;
+        }
+        None => tags.push(Tag {
+            // A brand-new tag has no server id yet; reconciliation fills it in.
+            id: format!("local-tag-{}", capture.local_id),
+            name: capture.tag_name.clone(),
+            category: capture.category,
+            thread_count: 1,
+            threads: vec![preview],
+        }),
+    }
+}
+
+/// Replace the optimistic row with the server's answer: the real thread id, the title the
+/// server derived from the body, and the tag the note actually landed in. The card the note
+/// was optimistically filed under adopts the server's tag id, so the grid keeps one card per
+/// tag instead of showing the optimistic one beside the real one.
+pub fn reconcile_capture(
+    tags: &mut Vec<Tag>,
+    local_id: &str,
+    tag_id: &str,
+    thread_id: &str,
+    title: &str,
+) {
+    let Some(source) = tags
+        .iter()
+        .position(|tag| tag.threads.iter().any(|thread| thread.id == local_id))
+    else {
+        return;
+    };
+    let row = tags[source]
+        .threads
+        .iter()
+        .position(|thread| thread.id == local_id)
+        .expect("the card was found holding this row");
+    let mut preview = tags[source].threads.remove(row);
+    preview.id = thread_id.to_owned();
+    preview.title = title.to_owned();
+
+    // A card for the server's tag may already exist (a second note into the same tag), in
+    // which case the row moves there rather than duplicating the card.
+    let target = match tags.iter().position(|tag| tag.id == tag_id) {
+        Some(index) => index,
+        None => {
+            tags[source].id = tag_id.to_owned();
+            source
+        }
+    };
+
+    tags[target].threads.insert(0, preview);
+    tags[target].thread_count += 1;
+
+    if target != source {
+        tags[source].thread_count = tags[source].thread_count.saturating_sub(1);
+        let orphaned = tags[source].thread_count == 0 && tags[source].id.starts_with("local-tag-");
+        if orphaned {
+            tags.remove(source);
+        }
+    }
+}
+
+/// Drop an optimistic row whose write failed, and the card the capture created for it.
+pub fn rollback_capture(tags: &mut Vec<Tag>, local_id: &str) {
+    let Some(tag) = tags
+        .iter_mut()
+        .find(|tag| tag.threads.iter().any(|thread| thread.id == local_id))
+    else {
+        return;
+    };
+
+    tag.threads.retain(|thread| thread.id != local_id);
+    tag.thread_count = tag.thread_count.saturating_sub(1);
+    let orphaned = tag.thread_count == 0 && tag.id.starts_with("local-tag-");
+    let tag_id = tag.id.clone();
+    if orphaned {
+        tags.retain(|kept| kept.id != tag_id);
     }
 }
 
@@ -216,222 +349,156 @@ const HOUR: u32 = 60 * MINUTE;
 const DAY: u32 = 24 * HOUR;
 
 /// The seeded home surface: 16 tags, five categories, real thread titles from the design
-/// reference so the layout is judged on realistic copy rather than lorem ipsum.
-const SEED: &[Tag] = &[
-    Tag {
-        id: "t1",
-        name: "Tokyo",
-        category: Category::Travel,
-        thread_count: 12,
-        threads: &[
-            ThreadPreview {
-                title: "The 6 a.m. train is not what the guidebooks promise",
-                age_minutes: 3 * HOUR,
-            },
-            ThreadPreview {
-                title: "Finding quiet in Shinjuku",
-                age_minutes: 2 * DAY,
-            },
-            ThreadPreview {
-                title: "Vending machines as infrastructure",
-                age_minutes: 6 * DAY,
-            },
+/// reference so the layout is judged on realistic copy rather than lorem ipsum. Tuples keep
+/// the fixture readable now that [`Tag`] owns its strings.
+type Seed = (
+    &'static str,
+    &'static str,
+    Category,
+    u32,
+    &'static [(&'static str, u32)],
+);
+
+const SEED: &[Seed] = &[
+    (
+        "t1",
+        "Tokyo",
+        Category::Travel,
+        12,
+        &[
+            (
+                "The 6 a.m. train is not what the guidebooks promise",
+                3 * HOUR,
+            ),
+            ("Finding quiet in Shinjuku", 2 * DAY),
+            ("Vending machines as infrastructure", 6 * DAY),
         ],
-    },
-    Tag {
-        id: "t2",
-        name: "Kyoto",
-        category: Category::Travel,
-        thread_count: 9,
-        threads: &[
-            ThreadPreview {
-                title: "Walking the Philosopher's Path at golden hour",
-                age_minutes: 9 * HOUR,
-            },
-            ThreadPreview {
-                title: "Moss and maintenance",
-                age_minutes: 4 * DAY,
-            },
+    ),
+    (
+        "t2",
+        "Kyoto",
+        Category::Travel,
+        9,
+        &[
+            ("Walking the Philosopher's Path at golden hour", 9 * HOUR),
+            ("Moss and maintenance", 4 * DAY),
         ],
-    },
-    Tag {
-        id: "t3",
-        name: "Berlin",
-        category: Category::Travel,
-        thread_count: 7,
-        threads: &[
-            ThreadPreview {
-                title: "A night that starts at 2 a.m.",
-                age_minutes: 22 * HOUR,
-            },
-            ThreadPreview {
-                title: "The Spree at sunrise",
-                age_minutes: 8 * DAY,
-            },
+    ),
+    (
+        "t3",
+        "Berlin",
+        Category::Travel,
+        7,
+        &[
+            ("A night that starts at 2 a.m.", 22 * HOUR),
+            ("The Spree at sunrise", 8 * DAY),
         ],
-    },
-    Tag {
-        id: "t4",
-        name: "Lisbon",
-        category: Category::Travel,
-        thread_count: 4,
-        threads: &[ThreadPreview {
-            title: "Learning to stop on the hills",
-            age_minutes: 3 * DAY,
-        }],
-    },
-    Tag {
-        id: "t5",
-        name: "language models",
-        category: Category::Tech,
-        thread_count: 14,
-        threads: &[
-            ThreadPreview {
-                title: "Reasoning is not the same as understanding",
-                age_minutes: 14 * MINUTE,
-            },
-            ThreadPreview {
-                title: "Small models at the edge",
-                age_minutes: 20 * HOUR,
-            },
-            ThreadPreview {
-                title: "Evaluating what we can't easily measure",
-                age_minutes: 5 * DAY,
-            },
+    ),
+    (
+        "t4",
+        "Lisbon",
+        Category::Travel,
+        4,
+        &[("Learning to stop on the hills", 3 * DAY)],
+    ),
+    (
+        "t5",
+        "language models",
+        Category::Tech,
+        14,
+        &[
+            ("Reasoning is not the same as understanding", 14 * MINUTE),
+            ("Small models at the edge", 20 * HOUR),
+            ("Evaluating what we can't easily measure", 5 * DAY),
         ],
-    },
-    Tag {
-        id: "t6",
-        name: "edge computing",
-        category: Category::Tech,
-        thread_count: 6,
-        threads: &[ThreadPreview {
-            title: "The cost of a round trip",
-            age_minutes: 2 * HOUR,
-        }],
-    },
-    Tag {
-        id: "t7",
-        name: "TypeScript",
-        category: Category::Tech,
-        thread_count: 5,
-        threads: &[ThreadPreview {
-            title: "Types that say too much",
-            age_minutes: 2 * DAY,
-        }],
-    },
-    Tag {
-        id: "t8",
-        name: "sourdough",
-        category: Category::Food,
-        thread_count: 8,
-        threads: &[
-            ThreadPreview {
-                title: "Why my starter has a name",
-                age_minutes: 45 * MINUTE,
-            },
-            ThreadPreview {
-                title: "Oven spring at altitude",
-                age_minutes: 3 * DAY,
-            },
+    ),
+    (
+        "t6",
+        "edge computing",
+        Category::Tech,
+        6,
+        &[("The cost of a round trip", 2 * HOUR)],
+    ),
+    (
+        "t7",
+        "TypeScript",
+        Category::Tech,
+        5,
+        &[("Types that say too much", 2 * DAY)],
+    ),
+    (
+        "t8",
+        "sourdough",
+        Category::Food,
+        8,
+        &[
+            ("Why my starter has a name", 45 * MINUTE),
+            ("Oven spring at altitude", 3 * DAY),
         ],
-    },
-    Tag {
-        id: "t9",
-        name: "ramen",
-        category: Category::Food,
-        thread_count: 5,
-        threads: &[ThreadPreview {
-            title: "The third bowl is the best one",
-            age_minutes: 7 * HOUR,
-        }],
-    },
-    Tag {
-        id: "t10",
-        name: "night markets",
-        category: Category::Food,
-        thread_count: 3,
-        threads: &[ThreadPreview {
-            title: "Order one thing at a time",
-            age_minutes: 4 * DAY,
-        }],
-    },
-    Tag {
-        id: "t11",
-        name: "Moby-Dick",
-        category: Category::Reading,
-        thread_count: 11,
-        threads: &[
-            ThreadPreview {
-                title: "The cetology chapters are a feature",
-                age_minutes: 5 * HOUR,
-            },
-            ThreadPreview {
-                title: "What the whale is for",
-                age_minutes: 9 * DAY,
-            },
+    ),
+    (
+        "t9",
+        "ramen",
+        Category::Food,
+        5,
+        &[("The third bowl is the best one", 7 * HOUR)],
+    ),
+    (
+        "t10",
+        "night markets",
+        Category::Food,
+        3,
+        &[("Order one thing at a time", 4 * DAY)],
+    ),
+    (
+        "t11",
+        "Moby-Dick",
+        Category::Reading,
+        11,
+        &[
+            ("The cetology chapters are a feature", 5 * HOUR),
+            ("What the whale is for", 9 * DAY),
         ],
-    },
-    Tag {
-        id: "t12",
-        name: "essays",
-        category: Category::Reading,
-        thread_count: 6,
-        threads: &[ThreadPreview {
-            title: "The essay is a first draft of attention",
-            age_minutes: 11 * HOUR,
-        }],
-    },
-    Tag {
-        id: "t13",
-        name: "notebooks",
-        category: Category::Reading,
-        thread_count: 4,
-        threads: &[ThreadPreview {
-            title: "Reading your old marginalia",
-            age_minutes: 6 * DAY,
-        }],
-    },
-    Tag {
-        id: "t14",
-        name: "slow time",
-        category: Category::Ideas,
-        thread_count: 9,
-        threads: &[
-            ThreadPreview {
-                title: "An hour that is not a unit of production",
-                age_minutes: 30 * MINUTE,
-            },
-            ThreadPreview {
-                title: "Notes from a month of unmeasured days",
-                age_minutes: 2 * DAY,
-            },
+    ),
+    (
+        "t12",
+        "essays",
+        Category::Reading,
+        6,
+        &[("The essay is a first draft of attention", 11 * HOUR)],
+    ),
+    (
+        "t13",
+        "notebooks",
+        Category::Reading,
+        4,
+        &[("Reading your old marginalia", 6 * DAY)],
+    ),
+    (
+        "t14",
+        "slow time",
+        Category::Ideas,
+        9,
+        &[
+            ("Doing one thing badly, on purpose", 30 * MINUTE),
+            ("The week has a shape", 4 * DAY),
         ],
-    },
-    Tag {
-        id: "t15",
-        name: "rituals",
-        category: Category::Ideas,
-        thread_count: 7,
-        threads: &[ThreadPreview {
-            title: "Two coffees and a closed door",
-            age_minutes: 16 * HOUR,
-        }],
-    },
-    Tag {
-        id: "t16",
-        name: "second brain",
-        category: Category::Ideas,
-        thread_count: 13,
-        threads: &[
-            ThreadPreview {
-                title: "Capture is the easy half",
-                age_minutes: 25 * MINUTE,
-            },
-            ThreadPreview {
-                title: "The note that refuses to link",
-                age_minutes: DAY,
-            },
+    ),
+    (
+        "t15",
+        "questions",
+        Category::Ideas,
+        7,
+        &[
+            ("What would I do with a free Tuesday", 5 * HOUR),
+            ("Asking better follow-ups", 6 * DAY),
         ],
-    },
+    ),
+    (
+        "t16",
+        "margin notes",
+        Category::Ideas,
+        2,
+        &[("Reading with a pencil is a conversation", 12 * HOUR)],
+    ),
 ];
