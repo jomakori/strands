@@ -132,6 +132,11 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test auth_isolation
 
+      - name: Run the summary generation acceptance test
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --test summary_generation
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest
