@@ -6,6 +6,7 @@
 use dioxus::prelude::*;
 
 use crate::data::{self, Category, Tag};
+use crate::routes::Route;
 
 /// The whole home screen. Reads the grid through [`data::load_home`], so the seeded fixture
 /// and the future typed client are interchangeable here.
@@ -122,11 +123,12 @@ fn TagCard(tag: Tag) -> Element {
         .map(|thread| data::relative(thread.age_minutes));
 
     rsx! {
-        article {
+        Link {
             class: "tag",
             style: "--cat: {tag.category.accent()}; --glow: {glow:.2};",
             "data-tag-id": tag.id,
             "data-cat": tag.category.key(),
+            to: Route::TagDetail { tag_id: tag.id.to_string() },
             div { class: "cat-row",
                 CatGlyph { category: tag.category, size: 18 }
                 span { class: "cat-name", "{tag.category.label()}" }
@@ -165,10 +167,10 @@ fn TagCard(tag: Tag) -> Element {
     }
 }
 
-/// The 24×24 stroked category mark, shared by chips and card eyebrows. The inner markup is
-/// a static string from [`Category::glyph`], not user input.
+/// The 24×24 stroked category mark, shared by chips, card eyebrows and the detail card.
+/// The inner markup is a static string from [`Category::glyph`], not user input.
 #[component]
-fn CatGlyph(category: Category, size: u8) -> Element {
+pub(crate) fn CatGlyph(category: Category, size: u8) -> Element {
     rsx! {
         svg {
             class: "glyph",

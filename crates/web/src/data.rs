@@ -120,6 +120,21 @@ pub fn load_home() -> Vec<Tag> {
     tags
 }
 
+/// Look up one tag by id for the detail view. `None` when the id does not match any seed —
+/// the view renders a "not found" state rather than unwrapping.
+pub fn find_tag(tag_id: &str) -> Option<Tag> {
+    SEED.iter().find(|tag| tag.id == tag_id).copied()
+}
+
+/// Breadcrumb segments for one thread in a tag's path stack: category, tag, thread title.
+pub fn thread_path(tag: &Tag, thread: &ThreadPreview) -> Vec<String> {
+    vec![
+        tag.category.label().to_string(),
+        tag.name.to_string(),
+        thread.title.to_string(),
+    ]
+}
+
 /// Narrow the grid to the active categories. An empty selection means "everything", which is
 /// the home surface's resting state — chips are additive, never a mode.
 pub fn visible(tags: &[Tag], active: &[Category]) -> Vec<Tag> {
