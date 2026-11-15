@@ -1,5 +1,6 @@
 //! Strands domain types — no IO, no framework dependencies (see architecture §6).
 
+pub mod connector;
 mod db;
 mod error;
 mod ids;
@@ -8,6 +9,7 @@ mod source;
 mod tag;
 mod timestamp;
 
+pub use connector::{Connector, ConnectorError, ConnectorManifest, Registry};
 pub use db::{
     ConnectorStatus, ImportRunState, JobKind, JobState, NoteKind, SummaryPreset, SummaryState,
 };

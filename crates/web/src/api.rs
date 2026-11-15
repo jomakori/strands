@@ -8,7 +8,9 @@
 
 use gloo_net::http::Request;
 use serde::de::DeserializeOwned;
-use strands_api_types::{Profile, TagDetail, TagSummary, ThreadDetail, ThreadSummary};
+use strands_api_types::{
+    ConnectorSummary, Profile, TagDetail, TagSummary, ThreadDetail, ThreadSummary,
+};
 use uuid::Uuid;
 
 /// Failure modes a caller must handle: the request/parse itself failed, or
@@ -59,6 +61,11 @@ pub async fn list_threads(tag_id: Uuid) -> Result<Vec<ThreadSummary>, ApiError> 
 /// `GET /api/v1/threads/{id}`.
 pub async fn thread_detail(id: Uuid) -> Result<ThreadDetail, ApiError> {
     get_json(&format!("/api/v1/threads/{id}")).await
+}
+
+/// `GET /api/v1/connectors` — every registered connector's settings row.
+pub async fn list_connectors() -> Result<Vec<ConnectorSummary>, ApiError> {
+    get_json("/api/v1/connectors").await
 }
 
 /// Shared GET-and-decode: every endpoint above is a plain GET with a JSON

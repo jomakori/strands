@@ -4,6 +4,8 @@
 
 use std::sync::Arc;
 
+use strands_core::Registry;
+use strands_core::connector::{FailingConnector, PlaceholderConnector, StubConnector};
 use strands_server::app::{AppState, router};
 use strands_server::auth::identity::GoogleIdentityProvider;
 use strands_server::config::AuthConfig;
@@ -24,13 +26,49 @@ async fn main() {
     let identity =
         GoogleIdentityProvider::from_config(&auth).expect("build the Google identity provider");
 
+    let registry = build_registry();
+
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
         .await
         .expect("bind 0.0.0.0:8080");
     axum::serve(
         listener,
-        router(AppState::new(pool, auth, Arc::new(identity))),
+        router(AppState::new(
+            pool,
+            auth,
+            Arc::new(identity),
+            Arc::new(registry),
+        )),
     )
     .await
     .expect("serve");
+}
+
+/// The process's connector set (T13): one working stub, one deliberately
+/// failing connector, and a disabled placeholder per not-yet-built service.
+fn build_registry() -> Registry {
+    let mut registry = Registry::new();
+    registry.register(StubConnector);
+    registry.register(FailingConnector);
+    registry.register(PlaceholderConnector::new(
+        "gmail",
+        "Gmail",
+        &["gmail.readonly"],
+    ));
+    registry.register(PlaceholderConnector::new(
+        "notion",
+        "Notion",
+        &["notion.read"],
+    ));
+    registry.register(PlaceholderConnector::new(
+        "drive",
+        "Drive",
+        &["drive.readonly"],
+    ));
+    registry.register(PlaceholderConnector::new(
+        "telegram",
+        "Telegram",
+        &["telegram.messages"],
+    ));
+    registry
 }

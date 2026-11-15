@@ -109,6 +109,7 @@ impl Harness {
             pool.clone(),
             config,
             Arc::new(FakeIdentityProvider { run: run.clone() }),
+            Arc::new(strands_core::Registry::new()),
         ));
 
         Some(Self { app, pool, run })
