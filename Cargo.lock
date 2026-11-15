@@ -3347,7 +3347,9 @@ version = "0.1.0"
 dependencies = [
  "dioxus",
  "gloo-net",
+ "serde",
  "strands-api-types",
+ "uuid",
 ]
 
 [[package]]

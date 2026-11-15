@@ -11,11 +11,13 @@ use axum::Router;
 use axum::routing::get;
 use serde_json::{Value, json};
 use sqlx::PgPool;
+use strands_core::Registry;
 
 use crate::api;
 use crate::auth::IdentityProvider;
 use crate::auth::routes::routes as auth_routes;
 use crate::config::AuthConfig;
+use crate::connectors::routes as connector_routes;
 use crate::error::AppError;
 
 /// Everything a handler may reach.
@@ -26,14 +28,23 @@ pub struct AppState {
     /// `dyn` so production can use Google and tests a fake, without generics
     /// leaking into every handler signature.
     pub identity: Arc<dyn IdentityProvider>,
+    /// Shared behind an `Arc`: one registry instance for the process, cloned
+    /// into every handler's `AppState` for free (T13).
+    pub registry: Arc<Registry>,
 }
 
 impl AppState {
-    pub fn new(pool: PgPool, auth: AuthConfig, identity: Arc<dyn IdentityProvider>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        auth: AuthConfig,
+        identity: Arc<dyn IdentityProvider>,
+        registry: Arc<Registry>,
+    ) -> Self {
         Self {
             pool,
             auth,
             identity,
+            registry,
         }
     }
 }
@@ -48,6 +59,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(healthz))
         .merge(auth_routes())
         .merge(api::routes())
+        .merge(connector_routes())
         // Unknown paths answer the same JSON error shape as every handler, so a
         // client parsing `{"error": …}` never meets an HTML body instead.
         .fallback(not_found)
@@ -102,6 +114,7 @@ mod tests {
                 token_endpoint: "https://accounts.example/token".into(),
             },
             Arc::new(NeverCalled),
+            Arc::new(strands_core::Registry::new()),
         )
     }
 

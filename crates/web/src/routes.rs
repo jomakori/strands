@@ -8,6 +8,7 @@ use dioxus::prelude::*;
 
 use crate::detail::TagDetail;
 use crate::home::HomeView;
+use crate::settings::Settings;
 
 #[derive(Clone, Debug, PartialEq, Routable)]
 pub enum Route {
@@ -16,4 +17,7 @@ pub enum Route {
 
     #[route("/tags/:tag_id")]
     TagDetail { tag_id: String },
+
+    #[route("/settings")]
+    Settings {},
 }
