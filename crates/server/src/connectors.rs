@@ -104,6 +104,7 @@ mod tests {
     use crate::auth::identity::BoxFuture;
     use crate::auth::{AuthError, ConsentRequest, Identity, IdentityProvider};
     use crate::config::AuthConfig;
+    use crate::summary::{SummarizeError, Summarizer};
 
     struct NoopIdentity;
 
@@ -119,6 +120,22 @@ mod tests {
             _redirect_uri: &'a str,
         ) -> BoxFuture<'a, Result<Identity, AuthError>> {
             Box::pin(async { Err(AuthError::InvalidCode) })
+        }
+    }
+
+    /// Never reached: no connector route generates a summary (ticket T7).
+    struct NeverSummarized;
+
+    impl Summarizer for NeverSummarized {
+        fn model_alias(&self) -> &str {
+            "unused"
+        }
+
+        fn summarize<'a>(
+            &'a self,
+            _prompt: &'a str,
+        ) -> crate::summary::BoxFuture<'a, Result<String, SummarizeError>> {
+            Box::pin(async { Err(SummarizeError::Request("never called".into())) })
         }
     }
 
@@ -138,6 +155,7 @@ mod tests {
             },
             Arc::new(NoopIdentity),
             Arc::new(registry),
+            Arc::new(NeverSummarized),
         )
     }
 

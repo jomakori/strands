@@ -614,6 +614,112 @@ button {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.12em;
+
+/* ---------- tag detail: summary card (T7) ---------- */
+.summary-card {
+  margin-top: 18px;
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.summary-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.summary-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.summary-badge {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.summary-body {
+  margin: 10px 0 0;
+  font-size: 14px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.summary-guides {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.guide-chip {
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.guide-chip.on {
+  border-color: var(--cat, var(--fg));
+  color: var(--fg);
+}
+
+.summary-input {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+}
+
+.summary-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.summary-generate,
+.summary-regenerate {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.summary-generate {
+  border-color: var(--cat, var(--fg));
+}
+
+.summary-generate:disabled,
+.summary-regenerate:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.summary-notice {
+  margin-top: 10px;
+}
+
+.summary-history-title {
+  margin: 18px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
@@ -670,4 +776,27 @@ button {
     border: 1px solid var(--border);
     border-radius: var(--radius);
   }
+
+.summary-versions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.summary-version {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.summary-version-number {
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
 }

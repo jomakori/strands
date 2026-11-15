@@ -28,6 +28,7 @@ use strands_server::app::{AppState, router};
 use strands_server::auth::identity::{BoxFuture, ConsentRequest};
 use strands_server::auth::{AuthError, Identity, IdentityProvider};
 use strands_server::config::AuthConfig;
+use strands_server::summary::{BoxFuture as SummarizeBoxFuture, SummarizeError, Summarizer};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -88,6 +89,23 @@ struct Harness {
     run: String,
 }
 
+/// Never reached: no route these tests drive generates a summary. Present only
+/// because `AppState` carries a [`Summarizer`] (ticket T7).
+struct UnusedSummarizer;
+
+impl Summarizer for UnusedSummarizer {
+    fn model_alias(&self) -> &str {
+        "unused"
+    }
+
+    fn summarize<'a>(
+        &'a self,
+        _prompt: &'a str,
+    ) -> SummarizeBoxFuture<'a, Result<String, SummarizeError>> {
+        Box::pin(async { Err(SummarizeError::Request("never called".into())) })
+    }
+}
+
 impl Harness {
     /// `None` when there is no usable database — the caller skips, loudly.
     /// See `tests/common/mod.rs` for the rule.
@@ -110,6 +128,7 @@ impl Harness {
             config,
             Arc::new(FakeIdentityProvider { run: run.clone() }),
             Arc::new(strands_core::Registry::new()),
+            Arc::new(UnusedSummarizer),
         ));
 
         Some(Self { app, pool, run })
