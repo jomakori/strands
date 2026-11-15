@@ -7,7 +7,9 @@ publish.workspace = true
 [dependencies]
 dioxus = { version = "0.7", features = ["web", "router"] }
 gloo-net = "0.6"
+serde = { version = "1", features = ["derive"] }
 strands-api-types = { path = "../api-types" }
+uuid = { version = "1", features = ["serde"] }
 
 [features]
 default = ["web"]
