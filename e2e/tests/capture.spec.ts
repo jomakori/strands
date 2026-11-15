@@ -34,8 +34,9 @@ test.describe("quick capture", () => {
       if (path.endsWith("/tags") && request.method() === "POST") {
         return json({
           id: TAG_ID,
-          name: "Tokyo",
+          name: "Sapporo",
           category_id: CATEGORY_ID,
+          thread_count: 0,
           created_at: "2026-11-15T12:00:00Z",
         });
       }
@@ -61,17 +62,19 @@ test.describe("quick capture", () => {
     );
 
     // A tag the caller does not have yet: the type-ahead offers to create it.
-    await page.locator('[data-testid="capture-tag"]').fill("Tokyo");
+    // Typed keystroke by keystroke, not fill(): the tag box is a controlled input and a
+    // synthetic single-shot input event does not reach Dioxus's handler.
+    await page.locator('[data-testid="capture-tag"]').pressSequentially("Sapporo", { delay: 20 });
     await expect(page.locator('[data-testid="capture-create"]')).toBeVisible();
     await page.locator('[data-cat="travel"]').click();
 
     await page.locator('[data-testid="capture-save"]').click();
 
-    // Back on the grid, the note is already visible inside the Tokyo card.
+    // Back on the grid, the note is already visible inside the Sapporo card.
     await expect(page).toHaveURL(/\/$/);
-    const tokyo = page.locator(`[data-tag-id="${TAG_ID}"]`);
-    await expect(tokyo).toContainText(NOTE);
-    await expect(page.locator("#grid [data-tag-id]")).toHaveCount(16);
+    const created = page.locator(`[data-tag-id="${TAG_ID}"]`);
+    await expect(created).toContainText(NOTE);
+    await expect(page.locator("#grid [data-tag-id]")).toHaveCount(17);
 
     const { clientWidth, scrollWidth } = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,
