@@ -188,3 +188,119 @@ jobs:
           name: strands-web-wasm-bundle
           path: ${{ steps.bundle.outputs.bundle_dir }}
           if-no-files-found: error
+
+  # Layout claims belong to the build, not to whoever last ran the app by hand:
+  # this job drives a real Chromium against the release bundle and fails when a
+  # viewport stops fitting or a capture stops matching the expected content.
+  visual:
+    name: Capture and verify the rendered UI
+    needs: wasm-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      NODE_VERSION: "24"
+      SERVE_PORT: "4173"
+      STRANDS_BASE_URL: http://127.0.0.1:4173
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Download the bundle built by wasm-build
+        uses: actions/download-artifact@v7
+        with:
+          name: strands-web-wasm-bundle
+          path: ${{ runner.temp }}/bundle
+
+      - name: Install Node for the browser runner
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Install the browser test dependencies
+        run: npm ci --prefix e2e --no-audit --no-fund
+
+      - name: Install Chromium for Playwright
+        run: npx --prefix e2e playwright install --with-deps chromium
+
+      - name: Serve the bundle on a local port
+        env:
+          BUNDLE_DIR: ${{ runner.temp }}/bundle
+        run: |
+          python3 e2e/serve.py "${BUNDLE_DIR}" "${SERVE_PORT}" &
+          HEALTH_URL="${STRANDS_BASE_URL}/"
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail --output /dev/null "${HEALTH_URL}"; then
+              echo "bundle answered after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::the bundle never answered on ${STRANDS_BASE_URL}"
+          exit 1
+
+      - name: Run the browser specs at 360px and 1440px
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Upload the captures and the JSON report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: strands-ui-captures
+          path: |
+            e2e/captures
+            e2e/test-results
+          if-no-files-found: warn
+
+      - name: Post the render result on the pull request
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require("fs");
+            const path = "e2e/test-results/results.json";
+            if (!fs.existsSync(path)) {
+              core.warning("no results.json — the specs did not start");
+              return;
+            }
+            const report = JSON.parse(fs.readFileSync(path, "utf8"));
+            const specs = [];
+            const walk = (suite, projectName) => {
+              for (const spec of suite.specs ?? []) {
+                for (const test of spec.tests ?? []) {
+                  specs.push({
+                    project: projectName ?? test.projectName,
+                    title: spec.title,
+                    state: test.results.at(-1)?.status ?? "unknown",
+                  });
+                }
+              }
+              for (const child of suite.suites ?? []) walk(child, projectName);
+            };
+            for (const suite of report.suites ?? []) walk(suite, suite.title);
+            const failed = specs.filter((spec) => spec.state !== "passed");
+            const passed = specs.length - failed.length;
+            const headline =
+              `**Rendered UI** — ${passed}/${specs.length} checks ` +
+              "passed against the release bundle.";
+            const lines = [
+              headline,
+              "",
+              "| Viewport | Check | Result |",
+              "| --- | --- | --- |",
+              ...specs.map(
+                (spec) => `| ${spec.project} | ${spec.title} | ${spec.state} |`
+              ),
+              "",
+              "Captures: artifact `strands-ui-captures` on this run.",
+            ];
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: context.issue.number,
+              body: lines.join("\n"),
+            });

@@ -100,6 +100,7 @@ fn Chip(category: Category, active: Signal<Vec<Category>>) -> Element {
         button {
             class: "fchip",
             r#type: "button",
+            "data-chip": "{category.key()}",
             style: "--cat: {category.accent()};",
             "aria-pressed": if pressed { "true" } else { "false" },
             onclick: move |_| toggle(active, category),

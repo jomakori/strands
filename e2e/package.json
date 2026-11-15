@@ -1,0 +1,12 @@
+{
+  "name": "strands-e2e",
+  "private": true,
+  "description": "Browser checks for the rendered Wasm bundle: layout assertions and screenshots.",
+  "scripts": {
+    "test": "playwright test",
+    "install-browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}
