@@ -7,10 +7,11 @@
 //! cookie automatically, so there is no credentials wiring to do here.
 
 use gloo_net::http::{Request, RequestBuilder};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use strands_api_types::{
-    ConnectorSummary, GenerateSummaryRequest, Profile, SearchResult, SummaryHistory, SummaryVersion,
-    TagDetail, TagSummary, ThreadDetail, ThreadSummary,
+    ConnectorSummary, GenerateSummaryRequest, Profile, SearchResult, SummaryHistory,
+    SummaryVersion, TagDetail, TagSummary, ThreadDetail, ThreadSummary,
 };
 use uuid::Uuid;
 
@@ -82,7 +83,7 @@ pub async fn generate_summary(
     tag_id: Uuid,
     request: &GenerateSummaryRequest,
 ) -> Result<SummaryVersion, ApiError> {
-    send_json(Request::post(&format!("/api/v1/tags/{tag_id}/summary")).json(request)?).await
+    post_json(&format!("/api/v1/tags/{tag_id}/summary"), request).await
 }
 
 /// `GET /api/v1/tags/{id}/summary/history` — every version, newest first.
@@ -96,9 +97,18 @@ async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
     send_json(Request::get(path)).await
 }
 
-/// Decode one prepared request's JSON body, mapping a non-2xx answer to `Status`.
+/// Shared POST-and-decode: send the DTO as the JSON body and decode the answer.
+async fn post_json<T: DeserializeOwned>(path: &str, body: &impl Serialize) -> Result<T, ApiError> {
+    decode(Request::post(path).json(body)?.send().await?).await
+}
+
+/// Send one prepared request and decode its JSON body.
 async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, ApiError> {
-    let response = request.send().await?;
+    decode(request.send().await?).await
+}
+
+/// One response body into `T`, mapping a non-2xx answer to `Status`.
+async fn decode<T: DeserializeOwned>(response: gloo_net::http::Response) -> Result<T, ApiError> {
     if !response.ok() {
         return Err(ApiError::Status(response.status()));
     }
