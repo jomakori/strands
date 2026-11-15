@@ -31,7 +31,7 @@ navigation — a note is anything captured with a source attached.
 ## Layout
 
 - `crates/core` — domain types (`Note`, `Tag`, `Source`), no IO, no framework deps
-- `crates/server` — axum binary, serves the API and the SPA bundle (currently `GET /healthz`)
+- `crates/server` — axum binary, serves the API and the SPA bundle (`GET /healthz`, Google OAuth login, session-backed `/api/v1/*`)
 - `crates/web` — Dioxus 0.7 web-only SPA (no SSR), built to WASM with `dx build`
 
 ## Quickstart
@@ -47,6 +47,52 @@ The SPA needs the dioxus CLI:
 cargo install dioxus-cli --version 0.7.10 --locked
 dx build --package strands-web --platform web --release
 ```
+
+## Configuration
+
+The server refuses to boot without its auth credentials rather than starting up
+half-configured: `main` exits with a clear message instead of failing on the
+first login.
+
+| Variable | Required | Default | Meaning |
+|---|---|---|---|
+| `DATABASE_URL` | yes | — | Postgres URL; migrations run on boot |
+| `GOOGLE_CLIENT_ID` | yes | — | OAuth client id from the Google Cloud console |
+| `GOOGLE_CLIENT_SECRET` | yes | — | OAuth client secret. **Never** commit it; supply it from the environment or the secret store (Doppler → ExternalSecret → env) |
+| `PUBLIC_BASE_URL` | no | `http://localhost:8080` | Public origin, no trailing slash. The redirect URI is `${PUBLIC_BASE_URL}/auth/google/callback` and must be registered byte for byte in the Google console |
+| `SESSION_COOKIE_SECURE` | no | `true` | `Secure` on the session cookie. Set `false` only for a local plain-HTTP run |
+| `SESSION_TTL_DAYS` | no | `30` | Session lifetime, matching spec §6 |
+| `GOOGLE_AUTHORIZATION_ENDPOINT` / `GOOGLE_TOKEN_ENDPOINT` | no | Google's | Overrides, for a fake provider or a test double (endpoints are strings, so nothing here needs Google at build time) |
+| `STRANDS_TEST_REQUIRE_DB` | no | unset | Test-only. When `1`, an unreachable `DATABASE_URL` fails a test instead of skipping; the CI `schema` job sets it so a broken service container cannot pass as "skipped" |
+
+```sh
+export DATABASE_URL=postgres://strands:strands@localhost/strands
+export GOOGLE_CLIENT_ID=...apps.googleusercontent.com
+export GOOGLE_CLIENT_SECRET=...            # from the secret store, not a file in the repo
+export PUBLIC_BASE_URL=http://localhost:8080
+export SESSION_COOKIE_SECURE=false         # local HTTP only
+cargo run -p strands-server
+```
+
+### Auth flow
+
+```
+GET  /auth/google           → 303 to Google's consent screen (state + PKCE S256, stored server-side)
+GET  /auth/google/callback  → exchange the code, upsert the user, seed 5 categories,
+                              set the session cookie, 303 to /
+POST /auth/logout           → 204, session row deleted, cookie cleared
+```
+
+The cookie (`strands_session`) carries only the opaque `sessions.id` — no access
+token, no email, nothing a client could replay at Google. It is `HttpOnly;
+SameSite=Lax` (the provider redirect is cross-site, so `Strict` would drop it on
+the way back) and `Secure` unless explicitly disabled.
+
+Handlers never parse a user id out of the request: they take the `CurrentUser`
+extractor (`crates/server/src/auth/extractor.rs`), which resolves the cookie to a
+live session row and rejects everything else with `401`. Every query takes that
+id as a bound parameter, so another user's object id is simply a row that does
+not exist — `404`, not `403`.
 
 ## Development
 
