@@ -45,6 +45,10 @@ impl FakeIdentityProvider {
         match code {
             "alice" => Some(("alice", format!("alice+{}@example.com", self.run), "Alice")),
             "bob" => Some(("bob", format!("bob+{}@example.com", self.run), "Bob")),
+            "archive-owner" | "archive-twice" | "archive-live-owner" => {
+                Some(("carol", format!("carol+{}@example.com", self.run), "Carol"))
+            }
+            "archive-stranger" => Some(("dave", format!("dave+{}@example.com", self.run), "Dave")),
             _ => None,
         }
     }

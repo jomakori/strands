@@ -3,8 +3,15 @@ import { expect, test } from "@playwright/test";
 // T19: the app driven with keys only. No clicks in this file — if a spec needs the
 // pointer, the keyboard path it is meant to prove is missing.
 test.describe("keyboard parity", () => {
-  test("a tag opens, a thread expands and Escape goes back", async ({ page }) => {
+  // The shortcut listener lives in the WASM app, so keys sent before the grid
+  // paints land on nothing. Open the app and wait for it to be interactive.
+  const openApp = async (page: import("@playwright/test").Page) => {
     await page.goto("/");
+    await page.locator("#grid").waitFor({ state: "visible" });
+  };
+
+  test("a tag opens, a thread expands and Escape goes back", async ({ page }) => {
+    await openApp(page);
 
     const tags = page.locator("#grid a.tag");
     await expect(tags.first()).toBeVisible();
@@ -34,7 +41,7 @@ test.describe("keyboard parity", () => {
   });
 
   test("slash opens search and Escape closes it", async ({ page }) => {
-    await page.goto("/");
+    await openApp(page);
     await expect(page.locator("#search-sheet")).toHaveCount(0);
 
     await page.keyboard.press("/");
@@ -50,7 +57,7 @@ test.describe("keyboard parity", () => {
   });
 
   test("c opens capture with the caret in the body", async ({ page }) => {
-    await page.goto("/");
+    await openApp(page);
 
     await page.keyboard.press("c");
     await page.waitForURL(/\/capture$/);
@@ -61,15 +68,16 @@ test.describe("keyboard parity", () => {
   test("question mark shows the map and every ticket action is on it", async ({
     page,
   }) => {
-    await page.goto("/");
+    await openApp(page);
 
     await page.keyboard.press("?");
     const map = page.locator("#shortcut-map");
     await expect(map).toBeVisible();
-    await expect(map).toContainText("Open a tag");
-    await expect(map).toContainText("Archive");
-    await expect(map).toContainText("Search");
-    await expect(map).toContainText("Approve");
+    await expect(map).toContainText("Open the focused tag");
+    await expect(map).toContainText("Archive the focused thread");
+    await expect(map).toContainText("Search notes");
+    await expect(map).toContainText("Approve the pending summary");
+    await expect(map).toContainText("Quick capture a note");
 
     // The close button is reachable, and the map closes with the pointer or the key.
     await expect(page.locator("#shortcut-close")).toBeFocused();
@@ -78,7 +86,7 @@ test.describe("keyboard parity", () => {
   });
 
   test("every focusable control draws a ring", async ({ page }) => {
-    await page.goto("/");
+    await openApp(page);
 
     const controls = page.locator(
       '#grid a.tag, #grid button.fchip, a[href="/capture"]',
@@ -105,7 +113,7 @@ test.describe("keyboard parity", () => {
   });
 
   test("keys do nothing while a field has focus", async ({ page }) => {
-    await page.goto("/");
+    await openApp(page);
 
     await page.keyboard.press("/");
     const input = page.locator("#search-input");
