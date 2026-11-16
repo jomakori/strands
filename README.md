@@ -28,9 +28,31 @@ navigation — a note is anything captured with a source attached.
 - **Connectors** — plugin seam for new sources (Google Photos, WhatsApp, Maps in v1)
 - **Server-owned** — one Rust service, Postgres via sqlx, no client-side database
 
+## Keyboard
+
+Every pointer action has a key. The map lives once in `crates/keymap/src/lib.rs`
+(`BINDINGS`), and `?` prints that same table, so the docs cannot drift from the
+bindings.
+
+| Keys | Does |
+| --- | --- |
+| `Tab` / `Shift+Tab` | Move focus in visual order |
+| `Enter` | Open the focused tag, or unfold the focused summary |
+| `Esc`, `Alt+←` | Go back: close search or help first, then leave the detail screen |
+| `/`, `Ctrl/⌘K` | Search |
+| `?` | Show this map |
+| `A` / `D` | Approve / discard the summary |
+| `X` | Archive the thread |
+| `C` | Quick capture |
+| `H` | Toggle history |
+
+Keys are ignored while a text field has focus, and while Control, Command or Alt
+is held, so typing never fires a chord.
+
 ## Layout
 
 - `crates/core` — domain types (`Note`, `Tag`, `Source`), no IO, no framework deps
+- `crates/keymap` — the shortcut map and the pure `(key, screen, typing) → action` resolver
 - `crates/server` — axum binary, serves the API and the SPA bundle (`GET /healthz`, Google OAuth login, session-backed `/api/v1/*`)
 - `crates/web` — Dioxus 0.7 web-only SPA (no SSR), built to WASM with `dx build`
 

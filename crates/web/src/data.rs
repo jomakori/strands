@@ -285,6 +285,19 @@ pub fn rollback_capture(tags: &mut Vec<Tag>, local_id: &str) {
     }
 }
 
+/// Archive one thread: drop its row from the tag it is filed under and hand back the title,
+/// so the view can say what happened. `None` when that tag no longer holds the row.
+pub fn archive_thread(tags: &mut [Tag], tag_id: &str, thread_id: &str) -> Option<String> {
+    let tag = tags.iter_mut().find(|tag| tag.id == tag_id)?;
+    let row = tag
+        .threads
+        .iter()
+        .position(|thread| thread.id == thread_id)?;
+    let thread = tag.threads.remove(row);
+    tag.thread_count = tag.thread_count.saturating_sub(1);
+    Some(thread.title)
+}
+
 /// Minute age of a tag's most recent thread; `u32::MAX` when a tag has no previews so it
 /// sorts last rather than first.
 fn latest_activity(tag: &Tag) -> u32 {

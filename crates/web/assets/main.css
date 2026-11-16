@@ -1093,3 +1093,116 @@ button {
   font-variant-numeric: tabular-nums;
   color: var(--fg);
 }
+
+/* --- Keyboard parity (T19) ---------------------------------------------- */
+
+/* Row that carries a thread's toggle and its archive button side by side. */
+.path-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.path-head .path-summary {
+  flex: 1;
+}
+
+.path-archive {
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.path-archive:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+
+/* One-line report of an archive, in the detail card's own voice. */
+.notice {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* The `?` map: the same sheet chrome as search, laid out as key/action rows. */
+.help__panel {
+  max-height: min(78dvh, 640px);
+  overflow-y: auto;
+}
+
+.help__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.help__close {
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+
+.help__close:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+
+.help__section {
+  margin: 16px 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.help__rows {
+  margin: 0;
+}
+
+.help__row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.help__row dt {
+  margin: 0;
+  min-width: 104px;
+}
+
+.help__row dd {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.help__row kbd {
+  font: inherit;
+  font-size: 12px;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+.help__hint {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}

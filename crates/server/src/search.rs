@@ -58,7 +58,7 @@ async fn recent_threads(pool: &PgPool, user_id: Uuid) -> Result<Vec<SearchResult
         "SELECT t.id, t.title, t.tag_id, tg.name \
          FROM threads t \
          JOIN tags tg ON tg.id = t.tag_id AND tg.user_id = $1 \
-         WHERE t.user_id = $1 \
+         WHERE t.user_id = $1 AND t.archived_at IS NULL \
          ORDER BY t.updated_at DESC \
          LIMIT $2",
     )
@@ -96,7 +96,7 @@ async fn search_threads(
                    ts_rank(t.title_tsv, q.tsq) AS rank \
             FROM threads t \
             CROSS JOIN q \
-            WHERE t.user_id = $1 AND t.title_tsv @@ q.tsq \
+            WHERE t.user_id = $1 AND t.archived_at IS NULL AND t.title_tsv @@ q.tsq \
             UNION ALL \
             SELECT t.id AS thread_id, t.tag_id, t.title, \
                    -- ts_headline marks hits with <b>…</b>; the sheet renders plain text, so
@@ -110,7 +110,7 @@ async fn search_threads(
             FROM notes n \
             JOIN threads t ON t.id = n.thread_id AND t.user_id = n.user_id \
             CROSS JOIN q \
-            WHERE n.user_id = $1 AND n.body_tsv @@ q.tsq \
+            WHERE n.user_id = $1 AND t.archived_at IS NULL AND n.body_tsv @@ q.tsq \
          ), \
          best AS ( \
             SELECT DISTINCT ON (thread_id) thread_id, tag_id, title, snippet, rank \

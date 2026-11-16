@@ -1,9 +1,9 @@
 //! Search sheet (T11): the one overlay the whole app shares.
 //!
-//! It is mounted once by the [`crate::routes::Shell`] layout rather than per page, so the
-//! bindings work from every route and opening the sheet never costs a remount of the view
-//! behind it. `'/'` and `Cmd/Ctrl+K` open it, `Esc` closes it, and a backdrop tap closes it
-//! too — the sheet is an overlay, not a route, so the browser's back button stays untouched.
+//! It is mounted once by the [`crate::routes::Shell`] layout rather than per page, so it
+//! works from every route and opening the sheet never costs a remount of the view behind
+//! it. The keys that open and close it come from the app's single listener (T19) and the
+//! map in `strands-keymap`; the sheet itself binds nothing and a backdrop tap closes it.
 //!
 //! Results are fetched on submit rather than per keystroke: the server ranks a whole note
 //! body, so a partial query would spend a request to answer something the user has not
@@ -11,27 +11,25 @@
 
 use dioxus::prelude::*;
 use strands_api_types::SearchResult;
-use wasm_bindgen::JsCast;
-use wasm_bindgen::closure::Closure;
-use web_sys::KeyboardEvent;
 
 use crate::api;
+use crate::keys::{self, Shortcuts};
 use crate::routes::Route;
 
 /// The sheet itself; renders nothing at all while closed.
 #[component]
 pub fn SearchSheet() -> Element {
-    let mut open = use_signal(|| false);
+    let shortcuts = use_context::<Shortcuts>();
+    // `open` is the shell's, so the keyboard and the pointer drive the same state.
+    let mut open = shortcuts.search_open;
     let mut query = use_signal(String::new);
     // `None` means "no search submitted yet" — that is the recents state.
     let mut submitted = use_signal(|| None::<String>);
 
-    use_shortcuts(open);
-
     // The overlay is keyboard-first: opening it must land the caret in the input.
     use_effect(move || {
         if open() {
-            focus_input();
+            keys::focus("#search-input");
         }
     });
 
@@ -130,60 +128,5 @@ fn SearchRow(row: SearchResult, open: Signal<bool>) -> Element {
                 span { class: "sheet__snippet", "{row.snippet}" }
             }
         }
-    }
-}
-
-/// Installs the document-level bindings once for the app's lifetime.
-fn use_shortcuts(mut open: Signal<bool>) {
-    use_hook(move || {
-        let listener = Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
-            let key = event.key();
-
-            if key == "Escape" {
-                if open() {
-                    event.prevent_default();
-                    open.set(false);
-                }
-            } else if (event.meta_key() || event.ctrl_key()) && key.eq_ignore_ascii_case("k") {
-                event.prevent_default();
-                open.toggle();
-            } else if key == "/" && !open() && !is_typing(&event) {
-                // `'/'` is a plain character, so only claim it when the user is not
-                // already typing into a field.
-                event.prevent_default();
-                open.set(true);
-            }
-        });
-
-        if let Some(document) = web_sys::window().and_then(|window| window.document()) {
-            let _ = document
-                .add_event_listener_with_callback("keydown", listener.as_ref().unchecked_ref());
-        }
-        // The shell layout outlives every route, so the listener is kept for the page's
-        // lifetime on purpose; dropping it would leave a freed callback registered.
-        listener.forget();
-    });
-}
-
-/// True when the key event came from a field that already consumes typing.
-pub(crate) fn is_typing(event: &KeyboardEvent) -> bool {
-    event
-        .target()
-        .and_then(|target| target.dyn_into::<web_sys::HtmlElement>().ok())
-        .is_some_and(|element| {
-            matches!(element.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT")
-                || element.is_content_editable()
-        })
-}
-
-/// Put the caret in the search field; a no-op if it is not on the page yet.
-fn focus_input() {
-    let Some(document) = web_sys::window().and_then(|window| window.document()) else {
-        return;
-    };
-    if let Ok(Some(element)) = document.query_selector("#search-input")
-        && let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>()
-    {
-        let _ = input.focus();
     }
 }

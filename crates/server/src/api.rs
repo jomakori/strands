@@ -37,6 +37,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/tags/{tag_id}/threads", get(list_threads))
         .route("/api/v1/threads", post(create_thread))
         .route("/api/v1/threads/{thread_id}", get(thread_detail))
+        .route("/api/v1/threads/{thread_id}/archive", post(archive_thread))
 }
 
 /// The signed-in user's own profile.
@@ -61,7 +62,8 @@ pub async fn me(
 /// Every tag the caller owns, most recently created first.
 ///
 /// `thread_count` is computed with a `LEFT JOIN`, not stored, so it can never
-/// drift from the rows it is counting.
+/// drift from the rows it is counting; archived threads are not in the count,
+/// because they are not in the list either.
 pub async fn list_tags(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -70,6 +72,7 @@ pub async fn list_tags(
         "SELECT t.id, t.name, t.category_id, t.created_at, COUNT(th.id) \
          FROM tags t \
          LEFT JOIN threads th ON th.tag_id = t.id AND th.user_id = t.user_id \
+            AND th.archived_at IS NULL \
          WHERE t.user_id = $1 \
          GROUP BY t.id, t.name, t.category_id, t.created_at \
          ORDER BY t.created_at DESC",
@@ -146,7 +149,7 @@ pub async fn list_threads(
 
     let rows: Vec<(Uuid, Uuid, String, i32, DateTime<Utc>)> = sqlx::query_as(
         "SELECT id, tag_id, title, source_count, updated_at \
-         FROM threads WHERE tag_id = $1 AND user_id = $2 \
+         FROM threads WHERE tag_id = $1 AND user_id = $2 AND archived_at IS NULL \
          ORDER BY updated_at DESC",
     )
     .bind(tag_id)
@@ -196,6 +199,33 @@ pub async fn thread_detail(
         source_count,
         updated_at,
     }))
+}
+
+/// Archive one thread: it leaves its tag's list and keeps every note it holds.
+///
+/// Archiving twice has the same outcome as archiving once, so the first timestamp
+/// survives; a foreign or unknown id is still [`AppError::NotFound`].
+pub async fn archive_thread(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    path: Result<Path<Uuid>, PathRejection>,
+) -> Result<StatusCode, AppError> {
+    let Path(thread_id) = path.map_err(|_| AppError::BadRequest("invalid thread id".into()))?;
+
+    let updated = sqlx::query(
+        "UPDATE threads SET archived_at = COALESCE(archived_at, now()), updated_at = now() \
+         WHERE id = $1 AND user_id = $2",
+    )
+    .bind(thread_id)
+    .bind(user.id)
+    .execute(&state.pool)
+    .await?
+    .rows_affected();
+
+    if updated == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Every category the caller owns, in the order the seed laid them down.

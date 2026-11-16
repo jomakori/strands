@@ -9,10 +9,12 @@ dioxus = { version = "0.7", features = ["web", "router"] }
 gloo-net = "0.6"
 serde = { version = "1", features = ["derive"] }
 strands-api-types = { path = "../api-types" }
+strands-keymap = { path = "../keymap" }
 uuid = { version = "1", features = ["serde", "v5"] }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = [
     "Document",
+    "Element",
     "EventTarget",
     "HtmlElement",
     "HtmlInputElement",

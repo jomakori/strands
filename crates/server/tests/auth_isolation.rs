@@ -703,3 +703,112 @@ async fn search_matches_a_note_with_its_tag_and_never_crosses_users() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(body["error"], "authentication required");
 }
+
+/// Insert one live thread for a tag: T19's archive route is the only way these move.
+async fn insert_thread(harness: &Harness, user_id: UserId, tag_id: Uuid, title: &str) -> Uuid {
+    let thread_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO threads (id, user_id, tag_id, title, source_count) \
+         VALUES ($1, $2, $3, $4, 1)",
+    )
+    .bind(thread_id)
+    .bind(user_id)
+    .bind(tag_id)
+    .bind(title)
+    .execute(&harness.pool)
+    .await
+    .expect("insert test thread");
+    thread_id
+}
+
+#[tokio::test]
+async fn archiving_hides_a_thread_from_its_tag_list_but_keeps_it_readable() {
+    let Some(harness) = Harness::connect("archive list").await else {
+        return;
+    };
+    let cookie = harness.login("archive-owner").await;
+    let user_id = harness.user_id(&cookie).await;
+    let tag_id = harness.create_tag(user_id, "Kyoto").await;
+    let thread_id = insert_thread(&harness, user_id, tag_id, "Temples in April").await;
+
+    let (status, _, before) = harness
+        .get(&format!("/api/v1/tags/{tag_id}/threads"), Some(&cookie))
+        .await;
+    assert_eq!(status, StatusCode::OK, "list body: {before}");
+    assert_eq!(before.as_array().map(Vec::len), Some(1));
+
+    let (status, _, body) = harness
+        .post(
+            &format!("/api/v1/threads/{thread_id}/archive"),
+            Some(&cookie),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "archive body: {body}");
+
+    let (status, _, after) = harness
+        .get(&format!("/api/v1/tags/{tag_id}/threads"), Some(&cookie))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        after.as_array().map(Vec::len),
+        Some(0),
+        "an archived thread must leave its tag's list: {after}"
+    );
+
+    // Archiving is a list decision, not a delete: the notes stay reachable by id.
+    let (status, _, detail) = harness
+        .get(&format!("/api/v1/threads/{thread_id}"), Some(&cookie))
+        .await;
+    assert_eq!(status, StatusCode::OK, "archived thread detail: {detail}");
+}
+
+#[tokio::test]
+async fn archiving_the_same_thread_twice_is_not_an_error() {
+    let Some(harness) = Harness::connect("archive twice").await else {
+        return;
+    };
+    let cookie = harness.login("archive-twice").await;
+    let user_id = harness.user_id(&cookie).await;
+    let tag_id = harness.create_tag(user_id, "Osaka").await;
+    let thread_id = insert_thread(&harness, user_id, tag_id, "Food crawl").await;
+
+    let uri = format!("/api/v1/threads/{thread_id}/archive");
+    for attempt in 1..=2 {
+        let (status, _, body) = harness.post(&uri, Some(&cookie)).await;
+        assert_eq!(
+            status,
+            StatusCode::NO_CONTENT,
+            "archive attempt {attempt} body: {body}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn archiving_someone_elses_thread_is_not_found_and_changes_nothing() {
+    let Some(harness) = Harness::connect("archive isolation").await else {
+        return;
+    };
+    let owner = harness.login("archive-live-owner").await;
+    let owner_id = harness.user_id(&owner).await;
+    let tag_id = harness.create_tag(owner_id, "Nara").await;
+    let thread_id = insert_thread(&harness, owner_id, tag_id, "Deer park").await;
+
+    let stranger = harness.login("archive-stranger").await;
+    let (status, _, _) = harness
+        .post(
+            &format!("/api/v1/threads/{thread_id}/archive"),
+            Some(&stranger),
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let (status, _, list) = harness
+        .get(&format!("/api/v1/tags/{tag_id}/threads"), Some(&owner))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        list.as_array().map(Vec::len),
+        Some(1),
+        "a stranger's archive must not touch the owner's list: {list}"
+    );
+}
