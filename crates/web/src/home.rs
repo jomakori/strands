@@ -97,6 +97,11 @@ pub fn HomeView() -> Element {
                             TagCard { key: "{tag.id}", tag: tag.clone() }
                         }
                     }
+                    footer { class: "feed-foot",
+                        Link { class: "back-link", id: "account-link", to: Route::Account {},
+                            "Account"
+                        }
+                    }
                 }
             }
         }

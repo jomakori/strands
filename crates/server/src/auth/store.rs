@@ -175,19 +175,21 @@ pub struct Profile {
     pub email: String,
     pub name: String,
     pub avatar_url: Option<String>,
+    pub provider: String,
 }
 
 pub async fn find_profile(pool: &PgPool, user_id: UserId) -> Result<Option<Profile>, sqlx::Error> {
-    let row: Option<(UserId, String, String, Option<String>)> =
-        sqlx::query_as("SELECT id, email, name, avatar_url FROM users WHERE id = $1")
+    let row: Option<(UserId, String, String, Option<String>, String)> =
+        sqlx::query_as("SELECT id, email, name, avatar_url, provider FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_optional(pool)
             .await?;
 
-    Ok(row.map(|(id, email, name, avatar_url)| Profile {
+    Ok(row.map(|(id, email, name, avatar_url, provider)| Profile {
         id,
         email,
         name,
         avatar_url,
+        provider,
     }))
 }

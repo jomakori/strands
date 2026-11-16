@@ -56,6 +56,7 @@ pub async fn me(
         email: profile.email,
         name: profile.name,
         avatar_url: profile.avatar_url,
+        provider: profile.provider,
     }))
 }
 

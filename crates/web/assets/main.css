@@ -810,6 +810,9 @@ button {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 
 /* ---------- tag detail: summary card (T7) ---------- */
 .summary-card {
@@ -1205,4 +1208,92 @@ button {
   margin: 16px 0 0;
   font-size: 12px;
   color: var(--muted);
+}
+
+/* ---------- account (T17) ---------- */
+
+.feed-foot {
+  padding: 24px 0 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 20px;
+}
+
+.account-identity {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 14px;
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.account-identity dt {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding-top: 2px;
+}
+
+.account-identity dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.account-section {
+  margin-top: 26px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.account-heading {
+  margin: 0 0 6px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.account-identity + .account-section {
+  margin-top: 22px;
+}
+
+.account-action,
+.button-danger {
+  display: inline-block;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 0 18px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  line-height: 42px;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.account-action:hover {
+  border-color: var(--muted);
+}
+
+.button-danger {
+  border-color: #c2453d;
+  color: #f0776d;
+  line-height: 42px;
+}
+
+.button-danger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.account-confirm-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.account-warning {
+  color: #f0776d;
 }

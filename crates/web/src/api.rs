@@ -165,6 +165,21 @@ pub async fn create_thread(body: &str, tag_id: Option<Uuid>) -> Result<ThreadDet
     post_json("/api/v1/threads", &body).await
 }
 
+/// `DELETE /api/v1/account/data` — erase every note, tag, thread and summary the
+/// caller owns. The account itself stays, so the caller is still signed in after.
+pub async fn delete_my_data() -> Result<(), ApiError> {
+    let response = Request::delete("/api/v1/account/data").send().await?;
+    if !response.ok() {
+        return Err(ApiError::Status(response.status()));
+    }
+    Ok(())
+}
+
+/// Where the export download points. An anchor with `download` lets the browser
+/// own the save dialog and send the session cookie, so there is no second code
+/// path that could disagree with `GET /api/v1/account/export`.
+pub const EXPORT_PATH: &str = "/api/v1/account/export";
+
 /// Shared GET-and-decode: every endpoint above is a plain GET with a JSON
 /// body, so the per-call code is just the path and the target type.
 async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {

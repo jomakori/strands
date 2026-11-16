@@ -11,4 +11,7 @@ pub struct Profile {
     pub email: String,
     pub name: String,
     pub avatar_url: Option<String>,
+    /// Which identity provider vouched for this account, e.g. `google`. The
+    /// account screen names it so a person can tell which sign-in they used.
+    pub provider: String,
 }

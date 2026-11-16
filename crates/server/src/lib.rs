@@ -3,6 +3,7 @@
 //! real router and reach the migration machinery without binding a socket or
 //! going through `main()`.
 
+pub mod account;
 pub mod api;
 pub mod app;
 pub mod auth;
