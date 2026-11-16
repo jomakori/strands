@@ -96,6 +96,25 @@ not exist — `404`, not `403`.
 
 ## Development
 
+### Summary review
+
+A generated summary is a *proposal*: it is committed or dropped, never silently
+applied. The approved version is the tag's summary, and it is the only thing the
+card shows as such.
+
+```
+POST /api/v1/tags/{id}/summary             → { "version": 1, "state": "proposed", ... }
+GET  /api/v1/tags/{id}/summary/history     → { "versions": [...], "approved_version_id": ... }
+POST /api/v1/tags/{id}/summary/{v}/approve → 200 with the new history (commits {v})
+POST /api/v1/tags/{id}/summary/{v}/discard → 200 with the new history (drops {v})
+POST /api/v1/tags/{id}/summary/{v}/edit    → { "body": "..." }, records a new `edited` version
+```
+
+An edit adds a row; it never rewrites the generated one, so the history always
+shows what the model said and what a person changed it to. The card binds
+`A` (approve), `D` (discard) and `H` (history) while it is open, and ignores
+them whenever a text field has focus.
+
 The toolchain is pinned in `rust-toolchain.toml` (stable plus the
 `wasm32-unknown-unknown` target); `rustup` installs it on first use in this directory.
 

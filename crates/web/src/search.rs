@@ -166,7 +166,7 @@ fn use_shortcuts(mut open: Signal<bool>) {
 }
 
 /// True when the key event came from a field that already consumes typing.
-fn is_typing(event: &KeyboardEvent) -> bool {
+pub(crate) fn is_typing(event: &KeyboardEvent) -> bool {
     event
         .target()
         .and_then(|target| target.dyn_into::<web_sys::HtmlElement>().ok())
@@ -181,9 +181,9 @@ fn focus_input() {
     let Some(document) = web_sys::window().and_then(|window| window.document()) else {
         return;
     };
-    if let Ok(Some(element)) = document.query_selector("#search-input") {
-        if let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>() {
-            let _ = input.focus();
-        }
+    if let Ok(Some(element)) = document.query_selector("#search-input")
+        && let Some(input) = element.dyn_ref::<web_sys::HtmlInputElement>()
+    {
+        let _ = input.focus();
     }
 }

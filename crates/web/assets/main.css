@@ -847,6 +847,103 @@ button {
   white-space: pre-wrap;
 }
 
+/* ---------- tag detail: proposal review (T8) ---------- */
+.summary-empty {
+  margin-top: 10px;
+}
+
+.summary-pending {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.summary-pending-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.summary-pending-chip {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--cat, var(--fg));
+}
+
+.summary-pending .summary-body {
+  margin-top: 8px;
+}
+
+.summary-edit {
+  width: 100%;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.summary-approve,
+.summary-discard {
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.summary-approve {
+  border-color: var(--cat, var(--fg));
+}
+
+.summary-approve:disabled,
+.summary-discard:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.summary-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.summary-history-head .summary-history-title {
+  margin: 0;
+}
+
+.summary-history-toggle {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.summary-version-state[data-state="approved"] {
+  color: var(--fg);
+}
+
+.summary-version-state[data-state="discarded"] {
+  text-decoration: line-through;
+}
+
 .summary-guides {
   display: flex;
   flex-wrap: wrap;
@@ -983,7 +1080,7 @@ button {
 
 .summary-version {
   display: grid;
-  grid-template-columns: 40px 1fr auto;
+  grid-template-columns: 40px 1fr auto auto;
   gap: 10px;
   align-items: baseline;
   padding: 6px 0;

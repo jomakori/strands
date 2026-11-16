@@ -5,13 +5,19 @@
 //! segments (category → tag → thread), each entry collapsible independently.
 
 use dioxus::prelude::*;
-use strands_api_types::{GenerateSummaryRequest, SummaryGuide, SummaryVersion};
+use strands_api_types::{
+    GenerateSummaryRequest, MAX_SUMMARY_BODY_CHARS, SummaryGuide, SummaryState, SummaryVersion,
+};
 use uuid::Uuid;
+use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
+use web_sys::KeyboardEvent;
 
 use crate::api;
 use crate::data::{self, Tag, ThreadPreview};
 use crate::home::{CatGlyph, Grid};
 use crate::routes::Route;
+use crate::search::is_typing;
 
 /// The whole detail screen: a back link, the tag card, and the path stack.
 #[component]
@@ -157,9 +163,10 @@ struct VersionRow {
     number: i32,
     guide: String,
     model_alias: String,
+    state: &'static str,
 }
 
-/// The newest version, pre-rendered for the card head.
+/// A version's badge plus its body, pre-rendered for the card.
 struct VersionHead {
     badge: String,
     body: String,
@@ -177,19 +184,28 @@ fn guide_label(guide: &SummaryGuide) -> String {
     }
 }
 
-/// Summary card (T7): pick a guide, generate or regenerate, and read the
-/// version history with the guide and model alias each version was made with.
+/// Summary card (T7 review gate, T8 approve / discard / edit): the approved body
+/// is the committed summary; a generated version is only a proposal until it is
+/// approved, and rewriting a proposal records a new `edited` version. A / D / H
+/// work on this card alone.
 #[component]
 fn SummaryCard(tag_id: String) -> Element {
-    // The fixture-driven grid carries placeholder ids ("t1"); only a real UUID
-    // tag can be summarised, so the controls stay inert on the demo pages.
-    let tag_uuid = Uuid::parse_str(&tag_id).ok();
+    // The fixture-driven grid carries placeholder ids ("t1"), which are mapped to a
+    // stable synthetic UUID so the card's review flow stays exercisable without a
+    // server (the e2e spec stubs the endpoints it calls).
+    let tag_uuid = Uuid::parse_str(&tag_id)
+        .ok()
+        .or_else(|| Some(Uuid::new_v5(&Uuid::NAMESPACE_OID, tag_id.as_bytes())));
 
     let mut versions = use_signal(Vec::<SummaryVersion>::new);
+    let mut approved = use_signal(|| None::<Uuid>);
     let mut selected = use_signal(|| GuideChoice::Shorter);
     let mut freeform = use_signal(String::new);
     let mut busy = use_signal(|| false);
     let mut notice = use_signal(|| None::<String>);
+    let mut history_open = use_signal(|| true);
+    let mut editing = use_signal(|| None::<Uuid>);
+    let mut draft = use_signal(String::new);
 
     // Load the history once the card mounts.
     use_future(move || async move {
@@ -197,15 +213,41 @@ fn SummaryCard(tag_id: String) -> Element {
             return;
         };
         match api::summary_history(id).await {
-            Ok(history) => versions.set(history.versions),
+            Ok(history) => {
+                versions.set(history.versions);
+                approved.set(history.approved_version_id);
+            }
             Err(error) => notice.set(Some(format!("Summary history unavailable: {error}"))),
         }
     });
 
-    let latest = versions.read().first().map(|version| VersionHead {
-        badge: format!("v{} · {}", version.version, version.model_alias),
-        body: version.body.clone(),
+    // Derived view state, computed before `rsx!` because the macro forbids `let`.
+    let approved_head = approved().and_then(|id| {
+        versions
+            .read()
+            .iter()
+            .find(|version| version.id == id)
+            .map(|version| VersionHead {
+                badge: format!("v{} · {} · approved", version.version, version.model_alias),
+                body: version.body.clone(),
+            })
     });
+    let pending_id = versions
+        .read()
+        .iter()
+        .find(|version| is_pending(version, approved()))
+        .map(|version| version.id);
+    let pending_head = pending_id.and_then(|id| {
+        versions
+            .read()
+            .iter()
+            .find(|version| version.id == id)
+            .map(|version| VersionHead {
+                badge: format!("v{} · {}", version.version, version.model_alias),
+                body: version.body.clone(),
+            })
+    });
+    let editing_pending = pending_id.is_some() && editing() == pending_id;
     let rows: Vec<VersionRow> = versions
         .read()
         .iter()
@@ -213,6 +255,7 @@ fn SummaryCard(tag_id: String) -> Element {
             number: version.version,
             guide: guide_label(&version.guide),
             model_alias: version.model_alias.clone(),
+            state: state_label(version.state),
         })
         .collect();
 
@@ -240,7 +283,10 @@ fn SummaryCard(tag_id: String) -> Element {
                 // Refetch rather than splice: a short-circuited generate returns
                 // the existing version, and the server owns the ordering.
                 Ok(version) => match api::summary_history(id).await {
-                    Ok(history) => versions.set(history.versions),
+                    Ok(history) => {
+                        versions.set(history.versions);
+                        approved.set(history.approved_version_id);
+                    }
                     Err(error) => {
                         let mut list = versions.write();
                         list.retain(|existing| existing.id != version.id);
@@ -255,18 +301,196 @@ fn SummaryCard(tag_id: String) -> Element {
         });
     };
 
+    // One transition, one request: the server answers with the card's whole review
+    // state, so nothing has to be spliced locally.
+    let mut review = move |action: ReviewAction| {
+        if busy() {
+            return;
+        }
+        let Some(id) = tag_uuid else {
+            notice.set(Some("Summaries need a saved tag.".to_owned()));
+            return;
+        };
+        busy.set(true);
+        notice.set(None);
+        spawn(apply_review(id, action, versions, approved, busy, notice));
+    };
+
+    let mut start_edit = move |id: Uuid| {
+        editing.set(Some(id));
+        draft.set(body_of(&versions.read(), id));
+    };
+    let cancel_edit = move |_| {
+        editing.set(None);
+        draft.set(String::new());
+    };
+    let mut save_edit = move || {
+        let (Some(id), Some(version_id)) = (tag_uuid, editing()) else {
+            return;
+        };
+        if busy() {
+            return;
+        }
+        let body = draft();
+        if body.trim().is_empty() {
+            notice.set(Some("The summary cannot be empty.".to_owned()));
+            return;
+        }
+
+        busy.set(true);
+        notice.set(None);
+        spawn(async move {
+            match api::edit_summary(id, version_id, &body).await {
+                Ok(history) => {
+                    versions.set(history.versions);
+                    approved.set(history.approved_version_id);
+                    editing.set(None);
+                    draft.set(String::new());
+                }
+                Err(error) => notice.set(Some(format!("Edit failed: {error}"))),
+            }
+            busy.set(false);
+        });
+    };
+
+    // A / D / H are the card's own bindings. The DOM listener is installed with the
+    // card and pulled back out when it unmounts, so they never fire on another
+    // screen; every key is handed to a coroutine because a raw DOM callback runs
+    // outside Dioxus' runtime and must not touch the card's signals directly.
+    let mut shortcuts = use_coroutine(move |mut rx: UnboundedReceiver<Shortcut>| async move {
+        while let Some(shortcut) = rx.recv().await {
+            if busy() || !card_is_mounted() {
+                continue;
+            }
+            match shortcut {
+                Shortcut::History => history_open.toggle(),
+                Shortcut::Approve => {
+                    if let Some(id) = pending_of(&versions.read(), approved()) {
+                        review(ReviewAction::Approve(id));
+                    }
+                }
+                Shortcut::Discard => {
+                    if let Some(id) = pending_of(&versions.read(), approved()) {
+                        review(ReviewAction::Discard(id));
+                    }
+                }
+            }
+        }
+    });
+    use_card_shortcuts(move |event: KeyboardEvent| {
+        if is_typing(&event)
+            || event.meta_key()
+            || event.ctrl_key()
+            || event.alt_key()
+            || !card_is_mounted()
+        {
+            return;
+        }
+
+        let key = event.key();
+        if key.eq_ignore_ascii_case("a") {
+            shortcuts.send(Shortcut::Approve);
+        } else if key.eq_ignore_ascii_case("d") {
+            shortcuts.send(Shortcut::Discard);
+        } else if key.eq_ignore_ascii_case("h") {
+            shortcuts.send(Shortcut::History);
+        }
+    });
+
     rsx! {
         section { class: "summary-card", id: "summary-card", "aria-label": "Summary",
             div { class: "summary-head",
                 h2 { class: "summary-title", "Summary" }
-                if let Some(head) = latest.as_ref() {
-                    span { class: "summary-badge", "{head.badge}" }
+                if let Some(head) = approved_head.as_ref() {
+                    span { class: "summary-badge", id: "summary-approved-badge", "{head.badge}" }
                 }
             }
-            if let Some(head) = latest.as_ref() {
+            if let Some(head) = approved_head.as_ref() {
                 p { class: "summary-body", id: "summary-body", "{head.body}" }
             } else {
-                p { class: "sub", "No summary yet." }
+                p {
+                    class: "sub summary-empty",
+                    id: "summary-body",
+                    "data-state": "empty",
+                    "Nothing approved yet — approve a proposal to commit it."
+                }
+            }
+            if let Some(head) = pending_head.as_ref() {
+                div { class: "summary-pending", id: "summary-pending",
+                    div { class: "summary-pending-head",
+                        span { class: "summary-pending-chip", "Pending approval" }
+                        span { class: "summary-badge", "{head.badge}" }
+                    }
+                    if editing_pending {
+                        textarea {
+                            class: "summary-edit",
+                            id: "summary-edit",
+                            rows: "4",
+                            maxlength: "{MAX_SUMMARY_BODY_CHARS}",
+                            value: "{draft}",
+                            oninput: move |event| draft.set(event.value()),
+                        }
+                        div { class: "summary-actions",
+                            button {
+                                class: "summary-approve",
+                                id: "summary-edit-save",
+                                r#type: "button",
+                                disabled: busy(),
+                                onclick: move |_| save_edit(),
+                                "Save as new version"
+                            }
+                            button {
+                                class: "summary-regenerate",
+                                id: "summary-edit-cancel",
+                                r#type: "button",
+                                onclick: cancel_edit,
+                                "Cancel"
+                            }
+                        }
+                    } else {
+                        p { class: "summary-body", id: "summary-pending-body", "{head.body}" }
+                        div { class: "summary-actions",
+                            button {
+                                class: "summary-approve",
+                                id: "summary-approve",
+                                r#type: "button",
+                                disabled: busy(),
+                                title: "Approve (A)",
+                                onclick: move |_| {
+                                    if let Some(id) = pending_id {
+                                        review(ReviewAction::Approve(id));
+                                    }
+                                },
+                                "Approve"
+                            }
+                            button {
+                                class: "summary-discard",
+                                id: "summary-discard",
+                                r#type: "button",
+                                disabled: busy(),
+                                title: "Discard (D)",
+                                onclick: move |_| {
+                                    if let Some(id) = pending_id {
+                                        review(ReviewAction::Discard(id));
+                                    }
+                                },
+                                "Discard"
+                            }
+                            button {
+                                class: "summary-regenerate",
+                                id: "summary-edit-start",
+                                r#type: "button",
+                                disabled: busy(),
+                                onclick: move |_| {
+                                    if let Some(id) = pending_id {
+                                        start_edit(id);
+                                    }
+                                },
+                                "Edit"
+                            }
+                        }
+                    }
+                }
             }
             div { class: "summary-guides", role: "group", "aria-label": "Summary guide",
                 for option in GuideChoice::ALL {
@@ -312,17 +536,151 @@ fn SummaryCard(tag_id: String) -> Element {
                 p { class: "sub summary-notice", "{message}" }
             }
             if !rows.is_empty() {
-                h3 { class: "summary-history-title", "Versions" }
-                ol { class: "summary-versions", id: "summary-versions",
-                    for row in rows.iter() {
-                        li { key: "{row.number}", class: "summary-version",
-                            span { class: "summary-version-number", "v{row.number}" }
-                            span { class: "summary-version-guide", "{row.guide}" }
-                            span { class: "summary-version-alias", "{row.model_alias}" }
+                div { class: "summary-history-head",
+                    h3 { class: "summary-history-title", "Versions" }
+                    button {
+                        class: "summary-history-toggle",
+                        id: "summary-history-toggle",
+                        r#type: "button",
+                        "aria-expanded": if history_open() { "true" } else { "false" },
+                        onclick: move |_| history_open.toggle(),
+                        if history_open() { "Hide (H)" } else { "History (H)" }
+                    }
+                }
+                if history_open() {
+                    ol { class: "summary-versions", id: "summary-versions",
+                        for row in rows.iter() {
+                            li { key: "{row.number}", class: "summary-version",
+                                span { class: "summary-version-number", "v{row.number}" }
+                                span { class: "summary-version-guide", "{row.guide}" }
+                                span { class: "summary-version-state", "data-state": "{row.state}", "{row.state}" }
+                                span { class: "summary-version-alias", "{row.model_alias}" }
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+/// The review transitions a card can run.
+#[derive(Clone, Copy)]
+/// A key the card answers to, decoded from the DOM before it reaches the signals.
+#[derive(Clone, Copy)]
+enum Shortcut {
+    Approve,
+    Discard,
+    History,
+}
+
+enum ReviewAction {
+    Approve(Uuid),
+    Discard(Uuid),
+}
+
+/// Run one transition and fold the server's answer back into the card.
+async fn apply_review(
+    tag_id: Uuid,
+    action: ReviewAction,
+    mut versions: Signal<Vec<SummaryVersion>>,
+    mut approved: Signal<Option<Uuid>>,
+    mut busy: Signal<bool>,
+    mut notice: Signal<Option<String>>,
+) {
+    let result = match action {
+        ReviewAction::Approve(id) => api::approve_summary(tag_id, id).await,
+        ReviewAction::Discard(id) => api::discard_summary(tag_id, id).await,
+    };
+
+    match result {
+        Ok(history) => {
+            versions.set(history.versions);
+            approved.set(history.approved_version_id);
+        }
+        Err(error) => notice.set(Some(format!("Review action failed: {error}"))),
+    }
+    busy.set(false);
+}
+
+/// True when a version is a proposal waiting for review: generated or rewritten,
+/// and not the version already in force.
+fn is_pending(version: &SummaryVersion, approved: Option<Uuid>) -> bool {
+    matches!(version.state, SummaryState::Proposed | SummaryState::Edited)
+        && Some(version.id) != approved
+}
+
+/// The id of the newest proposal, which is what A and D act on.
+fn pending_of(versions: &[SummaryVersion], approved: Option<Uuid>) -> Option<Uuid> {
+    versions
+        .iter()
+        .find(|version| is_pending(version, approved))
+        .map(|version| version.id)
+}
+
+/// One version's body, for prefilling the editor.
+fn body_of(versions: &[SummaryVersion], id: Uuid) -> String {
+    versions
+        .iter()
+        .find(|version| version.id == id)
+        .map(|version| version.body.clone())
+        .unwrap_or_default()
+}
+
+/// The state of a version as the history list shows it.
+fn state_label(state: SummaryState) -> &'static str {
+    match state {
+        SummaryState::Proposed => "proposed",
+        SummaryState::Approved => "approved",
+        SummaryState::Discarded => "discarded",
+        SummaryState::Edited => "edited",
+        SummaryState::Failed => "failed",
+    }
+}
+
+/// True while this card is on the page. The bindings are removed on unmount; this
+/// keeps a callback that somehow outlived the card from acting on the next screen.
+fn card_is_mounted() -> bool {
+    web_sys::window()
+        .and_then(|window| window.document())
+        .and_then(|document| document.query_selector("#summary-card").ok().flatten())
+        .is_some()
+}
+
+/// The card's document-level key listener, plus the means to take it back down.
+#[derive(Clone)]
+struct CardShortcuts {
+    document: web_sys::Document,
+    listener: std::rc::Rc<Closure<dyn FnMut(KeyboardEvent)>>,
+}
+
+impl CardShortcuts {
+    fn install(handler: impl FnMut(KeyboardEvent) + 'static) -> Option<Self> {
+        let document = web_sys::window()?.document()?;
+        let listener = std::rc::Rc::new(Closure::<dyn FnMut(KeyboardEvent)>::new(handler));
+        document
+            .add_event_listener_with_callback("keydown", listener.as_ref().as_ref().unchecked_ref())
+            .ok()?;
+
+        Some(Self { document, listener })
+    }
+
+    /// Unregisters the listener so A / D / H stop firing once the card is gone.
+    fn remove(&self) {
+        let _ = self.document.remove_event_listener_with_callback(
+            "keydown",
+            self.listener.as_ref().as_ref().unchecked_ref(),
+        );
+    }
+}
+
+/// Install the card's key listener for the card's lifetime and take it back down
+/// on unmount — the bindings belong to this card, not to the document forever.
+fn use_card_shortcuts(handler: impl FnMut(KeyboardEvent) + 'static) {
+    let shortcuts = use_hook(move || CardShortcuts::install(handler));
+    use_drop(move || {
+        if let Some(shortcuts) = shortcuts {
+            shortcuts.remove();
+        }
+    });
 }
