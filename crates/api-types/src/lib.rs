@@ -6,6 +6,7 @@
 //! where the fields happen to coincide today: the two contracts are free to
 //! diverge later without a rename ripping through both crates.
 
+mod account;
 mod category;
 mod connector;
 mod me;
@@ -14,6 +15,9 @@ mod summary;
 mod tag;
 mod thread;
 
+pub use account::{
+    AccountExport, EXPORT_FORMAT_VERSION, ExportNote, ExportSummary, ExportTag, ExportThread,
+};
 pub use category::CategorySummary;
 pub use connector::{ConnectorStatus, ConnectorSummary};
 pub use me::Profile;

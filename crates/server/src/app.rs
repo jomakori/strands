@@ -13,6 +13,7 @@ use serde_json::{Value, json};
 use sqlx::PgPool;
 use strands_core::Registry;
 
+use crate::account::routes as account_routes;
 use crate::api;
 use crate::auth::IdentityProvider;
 use crate::auth::routes::routes as auth_routes;
@@ -65,6 +66,7 @@ pub async fn healthz() -> Json<Value> {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
+        .merge(account_routes())
         .merge(auth_routes())
         .merge(api::routes())
         .merge(connector_routes())
@@ -172,6 +174,7 @@ mod tests {
         // (A query against the lazy pool would hang or fail instead.)
         for uri in [
             "/api/v1/me",
+            "/api/v1/account/export",
             "/api/v1/tags/00000000-0000-0000-0000-000000000001",
             "/api/v1/search?q=anything",
         ] {

@@ -1,5 +1,6 @@
 //! Strands web SPA entrypoint — Dioxus 0.7, web-only build, no SSR (spec D1).
 
+mod account;
 mod api;
 mod capture;
 mod data;

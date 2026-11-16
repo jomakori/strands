@@ -8,6 +8,7 @@
 use dioxus::prelude::*;
 use strands_keymap::Action;
 
+use crate::account::Account;
 use crate::capture::Capture;
 use crate::detail::TagDetail;
 use crate::help::ShortcutMap;
@@ -32,6 +33,9 @@ pub enum Route {
 
     #[route("/settings")]
     Settings {},
+
+    #[route("/account")]
+    Account {},
 }
 
 /// App shell: the active route, plus the overlays and the one listener every route shares.
