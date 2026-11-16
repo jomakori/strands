@@ -38,6 +38,7 @@ pub enum Overlay {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Key {
     Slash,
+    Comma,
     Question,
     Escape,
     Enter,
@@ -57,6 +58,7 @@ impl Key {
             "/" => Some(Key::Slash),
             "?" => Some(Key::Question),
             "Escape" => Some(Key::Escape),
+            "," | "<" => Some(Key::Comma),
             "Enter" => Some(Key::Enter),
             "Tab" => Some(Key::Tab),
             letter if letter.len() == 1 => match letter.to_ascii_lowercase().as_str() {
@@ -121,6 +123,7 @@ pub enum Action {
     ApproveSummary,
     DiscardSummary,
     ToggleHistory,
+    OpenSettings,
 }
 
 /// Where a binding applies.
@@ -155,6 +158,8 @@ pub struct Binding {
     pub keys: &'static str,
     /// What it does, in one line.
     pub label: &'static str,
+    /// The gesture a phone gets instead of the keys.
+    pub touch: &'static str,
     pub section: Section,
     pub scope: Scope,
     /// `None` for keys the browser or the focused element already handles.
@@ -171,6 +176,7 @@ pub enum Section {
     Search,
     Review,
     Capture,
+    Account,
 }
 
 impl Section {
@@ -181,6 +187,7 @@ impl Section {
             Section::Search => "Search and help",
             Section::Review => "Reviewing a tag",
             Section::Capture => "Capturing",
+            Section::Account => "Your account",
         }
     }
 }
@@ -190,6 +197,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Tab / Shift+Tab",
         label: "Move focus in visual order",
+        touch: "Tap in order",
         section: Section::Moving,
         scope: Scope::Anywhere,
         key: Some(Key::Tab),
@@ -199,6 +207,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Enter",
         label: "Open the focused tag, or fold a thread open",
+        touch: "Tap the card",
         section: Section::Moving,
         scope: Scope::Anywhere,
         key: Some(Key::Enter),
@@ -208,6 +217,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Esc",
         label: "Back to the grid",
+        touch: "Tap Back",
         section: Section::Moving,
         scope: Scope::Screen(Screen::TagDetail),
         key: Some(Key::Escape),
@@ -217,6 +227,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Alt + Left",
         label: "Back (browser history)",
+        touch: "Swipe from edge",
         section: Section::Moving,
         scope: Scope::Anywhere,
         key: None,
@@ -226,6 +237,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "/",
         label: "Search notes",
+        touch: "Tap Search",
         section: Section::Search,
         scope: Scope::Anywhere,
         key: Some(Key::Slash),
@@ -235,6 +247,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Ctrl K / Cmd K",
         label: "Search notes",
+        touch: "Tap Search",
         section: Section::Search,
         scope: Scope::Anywhere,
         key: Some(Key::K),
@@ -244,6 +257,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Esc",
         label: "Close search",
+        touch: "Tap the close button",
         section: Section::Search,
         scope: Scope::Search,
         key: Some(Key::Escape),
@@ -253,6 +267,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "?",
         label: "Show or close this map",
+        touch: "Tap the ? button",
         section: Section::Search,
         scope: Scope::AppAndMap,
         key: Some(Key::Question),
@@ -262,6 +277,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Esc",
         label: "Close this map",
+        touch: "Tap the close button",
         section: Section::Search,
         scope: Scope::Help,
         key: Some(Key::Escape),
@@ -271,6 +287,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "A",
         label: "Approve the pending summary",
+        touch: "Tap Approve",
         section: Section::Review,
         scope: Scope::Screen(Screen::TagDetail),
         key: Some(Key::A),
@@ -280,6 +297,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "D",
         label: "Discard the pending summary",
+        touch: "Tap Discard",
         section: Section::Review,
         scope: Scope::Screen(Screen::TagDetail),
         key: Some(Key::D),
@@ -289,6 +307,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "H",
         label: "Show or hide summary versions",
+        touch: "Tap Versions",
         section: Section::Review,
         scope: Scope::Screen(Screen::TagDetail),
         key: Some(Key::H),
@@ -298,6 +317,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "X",
         label: "Archive the focused thread",
+        touch: "Tap Archive",
         section: Section::Review,
         scope: Scope::Screen(Screen::TagDetail),
         key: Some(Key::X),
@@ -307,11 +327,22 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "C",
         label: "Quick capture a note",
+        touch: "Tap Capture",
         section: Section::Capture,
         scope: Scope::Anywhere,
         key: Some(Key::C),
         chord: false,
         action: Some(Action::OpenCapture),
+    },
+    Binding {
+        keys: ",",
+        label: "Open settings",
+        touch: "Tap Account",
+        section: Section::Account,
+        scope: Scope::Anywhere,
+        key: Some(Key::Comma),
+        chord: false,
+        action: Some(Action::OpenSettings),
     },
 ];
 
@@ -362,6 +393,26 @@ mod tests {
             meta,
             alt,
             ..KeyPress::plain(key)
+        }
+    }
+
+    #[test]
+    fn comma_opens_settings_but_not_from_a_field() {
+        assert_eq!(
+            resolve(KeyPress::plain(Key::Comma), Screen::Home, None),
+            Some(Action::OpenSettings)
+        );
+        assert_eq!(resolve(typed(Key::Comma), Screen::Home, None), None);
+    }
+
+    #[test]
+    fn every_row_names_a_touch_gesture() {
+        for binding in BINDINGS {
+            assert!(
+                !binding.touch.trim().is_empty(),
+                "{} has no gesture",
+                binding.keys
+            );
         }
     }
 
