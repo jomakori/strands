@@ -8,27 +8,13 @@ mod litellm;
 mod prompt;
 pub mod store;
 
-use std::future::Future;
-use std::pin::Pin;
-
 use sha2::{Digest, Sha256};
 use strands_api_types::SummaryGuide;
 use strands_core::SummaryPreset;
 
+pub use crate::llm::{BoxFuture, LlmError as SummarizeError};
 pub use litellm::LiteLlmSummarizer;
 pub use prompt::build_prompt;
-
-/// Boxed future so [`Summarizer`] stays object-safe (`Arc<dyn Summarizer>`).
-pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-
-/// Failure talking to the LLM backend; mapped to a 500 by `AppError`.
-#[derive(Debug, thiserror::Error)]
-pub enum SummarizeError {
-    #[error("litellm request failed: {0}")]
-    Request(String),
-    #[error("litellm response was not usable: {0}")]
-    InvalidResponse(String),
-}
 
 /// Everything a handler needs to turn a prompt into summary text.
 pub trait Summarizer: Send + Sync {
