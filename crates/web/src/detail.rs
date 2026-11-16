@@ -357,8 +357,8 @@ fn SummaryCard(tag_id: String) -> Element {
     // card and pulled back out when it unmounts, so they never fire on another
     // screen; every key is handed to a coroutine because a raw DOM callback runs
     // outside Dioxus' runtime and must not touch the card's signals directly.
-    let mut shortcuts = use_coroutine(move |mut rx: UnboundedReceiver<Shortcut>| async move {
-        while let Some(shortcut) = rx.recv().await {
+    let shortcuts = use_coroutine(move |mut rx: UnboundedReceiver<Shortcut>| async move {
+        while let Ok(shortcut) = rx.recv().await {
             if busy() || !card_is_mounted() {
                 continue;
             }
@@ -564,8 +564,6 @@ fn SummaryCard(tag_id: String) -> Element {
     }
 }
 
-/// The review transitions a card can run.
-#[derive(Clone, Copy)]
 /// A key the card answers to, decoded from the DOM before it reaches the signals.
 #[derive(Clone, Copy)]
 enum Shortcut {
@@ -574,6 +572,8 @@ enum Shortcut {
     History,
 }
 
+/// The review transitions a card can run.
+#[derive(Clone, Copy)]
 enum ReviewAction {
     Approve(Uuid),
     Discard(Uuid),
