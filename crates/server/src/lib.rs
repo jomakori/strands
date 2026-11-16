@@ -11,5 +11,8 @@ pub mod config;
 pub mod connectors;
 pub mod db;
 pub mod error;
+pub mod ingest;
+pub mod llm;
 pub mod search;
 pub mod summary;
+pub mod tagging;

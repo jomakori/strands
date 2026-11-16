@@ -10,7 +10,7 @@ use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
 use crate::auth::AuthError;
-use crate::summary::SummarizeError;
+use crate::llm::LlmError;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -53,11 +53,11 @@ impl From<strands_core::ValidationError> for AppError {
     }
 }
 
-impl From<SummarizeError> for AppError {
-    fn from(error: SummarizeError) -> Self {
-        eprintln!("strands: summarize failed: {error}");
+impl From<LlmError> for AppError {
+    fn from(error: LlmError) -> Self {
+        eprintln!("strands: llm call failed: {error}");
         Self::Internal {
-            context: "summarizer",
+            context: "llm",
             source: sqlx::Error::Protocol(error.to_string()),
         }
     }

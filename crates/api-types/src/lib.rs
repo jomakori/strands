@@ -9,6 +9,7 @@
 mod account;
 mod category;
 mod connector;
+mod ingest;
 mod me;
 mod search;
 mod summary;
@@ -20,6 +21,7 @@ pub use account::{
 };
 pub use category::CategorySummary;
 pub use connector::{ConnectorStatus, ConnectorSummary};
+pub use ingest::{IngestItem, IngestRequest, IngestResult};
 pub use me::Profile;
 pub use search::SearchResult;
 pub use summary::{

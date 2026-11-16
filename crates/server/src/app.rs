@@ -20,9 +20,11 @@ use crate::auth::routes::routes as auth_routes;
 use crate::config::AuthConfig;
 use crate::connectors::routes as connector_routes;
 use crate::error::AppError;
+use crate::ingest::routes as ingest_routes;
 use crate::search::routes as search_routes;
 use crate::summary::Summarizer;
 use crate::summary::handlers::routes as summary_routes;
+use crate::tagging::{Tagger, UnconfiguredTagger};
 
 /// Everything a handler may reach.
 #[derive(Clone)]
@@ -38,6 +40,10 @@ pub struct AppState {
     /// `dyn` so production can use LiteLLM and tests a fake that never hits
     /// the network (ticket T7).
     pub summarizer: Arc<dyn Summarizer>,
+    /// `dyn` for the same reason as `summarizer` (ticket T9). `AppState::new`
+    /// installs a tagger that fails loudly, so an unconfigured deploy cannot
+    /// silently skip tag assignment; production calls `with_tagger`.
+    pub tagger: Arc<dyn Tagger>,
 }
 
 impl AppState {
@@ -54,7 +60,14 @@ impl AppState {
             identity,
             registry,
             summarizer,
+            tagger: Arc::new(UnconfiguredTagger),
         }
+    }
+
+    /// Install the production tagger (ticket T9).
+    pub fn with_tagger(mut self, tagger: Arc<dyn Tagger>) -> Self {
+        self.tagger = tagger;
+        self
     }
 }
 
@@ -70,6 +83,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth_routes())
         .merge(api::routes())
         .merge(connector_routes())
+        .merge(ingest_routes())
         .merge(search_routes())
         .merge(summary_routes())
         // Unknown paths answer the same JSON error shape as every handler, so a
