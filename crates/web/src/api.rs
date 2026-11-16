@@ -70,6 +70,18 @@ pub async fn thread_detail(id: Uuid) -> Result<ThreadDetail, ApiError> {
     get_json(&format!("/api/v1/threads/{id}")).await
 }
 
+/// `POST /api/v1/threads/{id}/archive` — the thread leaves its tag's list. Success is a
+/// `204` with no body, so there is nothing to decode and only the status to check.
+pub async fn archive_thread(id: Uuid) -> Result<(), ApiError> {
+    let response = Request::post(&format!("/api/v1/threads/{id}/archive"))
+        .send()
+        .await?;
+    if response.ok() {
+        return Ok(());
+    }
+    Err(ApiError::Status(response.status()))
+}
+
 /// `GET /api/v1/connectors` — every registered connector's settings row.
 pub async fn list_connectors() -> Result<Vec<ConnectorSummary>, ApiError> {
     get_json("/api/v1/connectors").await

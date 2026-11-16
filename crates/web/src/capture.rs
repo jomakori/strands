@@ -41,6 +41,10 @@ pub fn Capture() -> Element {
     let mut saving = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
 
+    // Capture exists to take writing, so the caret starts in the body: the keyboard path
+    // into this screen ends with a field already focused, and Tab walks on from there.
+    use_effect(|| crate::keys::focus("#capture-body"));
+
     // The caller's tags and categories, once, on mount. A failure is not fatal: the grid's
     // own tags still drive the type-ahead and a new tag simply cannot be filed yet.
     use_future(move || async move {

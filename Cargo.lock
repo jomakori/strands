@@ -3327,6 +3327,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "strands-keymap"
+version = "0.1.0"
+
+[[package]]
 name = "strands-server"
 version = "0.1.0"
 dependencies = [
@@ -3355,6 +3359,7 @@ dependencies = [
  "gloo-net",
  "serde",
  "strands-api-types",
+ "strands-keymap",
  "uuid",
  "wasm-bindgen",
  "web-sys",
