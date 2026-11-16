@@ -13,7 +13,7 @@ use chrono::{Duration, Utc};
 use http_body_util::BodyExt;
 use sqlx::PgPool;
 use strands_api_types::{GenerateSummaryRequest, SummaryGuide, SummaryHistory, SummaryVersion};
-use strands_core::{Registry, SummaryPreset, TagId, UserId};
+use strands_core::{Registry, SummaryPreset, SummaryState, TagId, UserId};
 use strands_server::app::{AppState, router};
 use strands_server::auth::identity::BoxFuture as IdentityFuture;
 use strands_server::auth::{AuthError, ConsentRequest, Identity, IdentityProvider};
@@ -375,6 +375,7 @@ async fn inserting_twenty_one_versions_prunes_the_tag_to_twenty_rows() {
                 body: &body,
                 model_alias: MODEL_ALIAS,
                 source_hash: &source_hash,
+                state: SummaryState::Proposed,
             },
         )
         .await

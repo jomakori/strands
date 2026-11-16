@@ -7,8 +7,9 @@
 
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
+use strands_api_types::SummaryState as WireState;
 use strands_api_types::SummaryVersion;
-use strands_core::{SummaryPreset, TagId, UserId};
+use strands_core::{SummaryPreset, SummaryState, TagId, UserId};
 use uuid::Uuid;
 
 use super::{guide_columns, guide_from_columns};
@@ -28,6 +29,7 @@ pub struct SummaryVersionRow {
     pub preset: Option<SummaryPreset>,
     pub guide_text: Option<String>,
     pub source_hash: String,
+    pub state: SummaryState,
     pub created_at: DateTime<Utc>,
 }
 
@@ -40,8 +42,22 @@ impl From<SummaryVersionRow> for SummaryVersion {
             body: row.body,
             guide: guide_from_columns(row.preset, row.guide_text),
             model_alias: row.model_alias,
+            state: wire_state(row.state),
             created_at: row.created_at,
         }
+    }
+}
+
+/// The wire mirror of a stored state. The two enums live in different crates
+/// (`strands_core` owns the Postgres one, `strands_api_types` the JSON one), so
+/// the mapping is written out rather than derived.
+fn wire_state(state: SummaryState) -> WireState {
+    match state {
+        SummaryState::Proposed => WireState::Proposed,
+        SummaryState::Approved => WireState::Approved,
+        SummaryState::Discarded => WireState::Discarded,
+        SummaryState::Edited => WireState::Edited,
+        SummaryState::Failed => WireState::Failed,
     }
 }
 
@@ -56,6 +72,7 @@ type SummaryRowTuple = (
     Option<SummaryPreset>,
     Option<String>,
     String,
+    SummaryState,
     DateTime<Utc>,
 );
 
@@ -67,6 +84,8 @@ pub struct NewVersion<'a> {
     pub body: &'a str,
     pub model_alias: &'a str,
     pub source_hash: &'a str,
+    /// `Proposed` for freshly generated text, `Edited` for a person's rewrite.
+    pub state: SummaryState,
 }
 
 /// True if and only if `tag_id` belongs to `user_id` — the ownership check a
@@ -109,7 +128,7 @@ pub async fn newest_version(
     user_id: UserId,
 ) -> Result<Option<SummaryVersionRow>, sqlx::Error> {
     let row: Option<SummaryRowTuple> = sqlx::query_as(
-        "SELECT id, tag_id, version, body, model_alias, preset, guide, source_hash, created_at \
+        "SELECT id, tag_id, version, body, model_alias, preset, guide, source_hash, state, created_at \
          FROM summaries WHERE tag_id = $1 AND user_id = $2 \
          ORDER BY version DESC LIMIT 1",
     )
@@ -129,7 +148,7 @@ pub async fn history(
     user_id: UserId,
 ) -> Result<Vec<SummaryVersionRow>, sqlx::Error> {
     let rows: Vec<SummaryRowTuple> = sqlx::query_as(
-        "SELECT id, tag_id, version, body, model_alias, preset, guide, source_hash, created_at \
+        "SELECT id, tag_id, version, body, model_alias, preset, guide, source_hash, state, created_at \
          FROM summaries WHERE tag_id = $1 AND user_id = $2 \
          ORDER BY version DESC",
     )
@@ -139,6 +158,119 @@ pub async fn history(
     .await?;
 
     Ok(rows.into_iter().map(row_from_tuple).collect())
+}
+
+/// One version, scoped to its tag and owner. `None` covers both "no such
+/// version" and "someone else's" — the reviewer endpoints answer 404 for either.
+pub async fn version_for_tag(
+    pool: &PgPool,
+    tag_id: TagId,
+    user_id: UserId,
+    summary_id: Uuid,
+) -> Result<Option<SummaryVersionRow>, sqlx::Error> {
+    let row: Option<SummaryRowTuple> = sqlx::query_as(
+        "SELECT id, tag_id, version, body, model_alias, preset, guide, source_hash, state, created_at \
+         FROM summaries WHERE id = $1 AND tag_id = $2 AND user_id = $3",
+    )
+    .bind(summary_id)
+    .bind(tag_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.map(row_from_tuple))
+}
+
+/// The version currently in force for a tag, if one has been approved.
+pub async fn approved_version_id(
+    pool: &PgPool,
+    tag_id: TagId,
+    user_id: UserId,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    sqlx::query_scalar("SELECT summary_approved_id FROM tags WHERE id = $1 AND user_id = $2")
+        .bind(tag_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map(Option::flatten)
+}
+
+/// Commit one version: it becomes the tag's summary, and its row records that
+/// it was approved. The pointer on `tags` — not the row states — decides which
+/// version is in force, so approving a newer version leaves the earlier
+/// approved row's own history intact.
+pub async fn approve(
+    pool: &PgPool,
+    tag_id: TagId,
+    user_id: UserId,
+    summary_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let updated = sqlx::query(
+        "UPDATE summaries SET state = 'approved' \
+         WHERE id = $1 AND tag_id = $2 AND user_id = $3 AND state <> 'discarded'",
+    )
+    .bind(summary_id)
+    .bind(tag_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    if updated == 0 {
+        return Ok(false);
+    }
+
+    sqlx::query("UPDATE tags SET summary_approved_id = $1 WHERE id = $2 AND user_id = $3")
+        .bind(summary_id)
+        .bind(tag_id)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(true)
+}
+
+/// Drop one version without applying it: it is marked discarded, and if it was
+/// the approved one the tag is left with no summary at all rather than a
+/// pointer to something the caller just threw away.
+pub async fn discard(
+    pool: &PgPool,
+    tag_id: TagId,
+    user_id: UserId,
+    summary_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+
+    let updated = sqlx::query(
+        "UPDATE summaries SET state = 'discarded' \
+         WHERE id = $1 AND tag_id = $2 AND user_id = $3",
+    )
+    .bind(summary_id)
+    .bind(tag_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+
+    if updated == 0 {
+        return Ok(false);
+    }
+
+    sqlx::query(
+        "UPDATE tags SET summary_approved_id = NULL \
+         WHERE id = $1 AND user_id = $2 AND summary_approved_id = $3",
+    )
+    .bind(tag_id)
+    .bind(user_id)
+    .bind(summary_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Insert the next version for a tag and prune anything past the newest
@@ -161,8 +293,8 @@ pub async fn insert_version(
     let id = Uuid::new_v4();
     let (created_at,): (DateTime<Utc>,) = sqlx::query_as(
         "INSERT INTO summaries \
-            (id, user_id, tag_id, version, body, model_alias, guide, preset, source_hash) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+            (id, user_id, tag_id, version, body, state, model_alias, guide, preset, source_hash) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
          RETURNING created_at",
     )
     .bind(id)
@@ -170,6 +302,7 @@ pub async fn insert_version(
     .bind(new.tag_id)
     .bind(next_version)
     .bind(new.body)
+    .bind(new.state)
     .bind(new.model_alias)
     .bind(&guide_text)
     .bind(preset)
@@ -199,12 +332,24 @@ pub async fn insert_version(
         preset,
         guide_text,
         source_hash: new.source_hash.to_owned(),
+        state: new.state,
         created_at,
     })
 }
 
 fn row_from_tuple(row: SummaryRowTuple) -> SummaryVersionRow {
-    let (id, tag_id, version, body, model_alias, preset, guide_text, source_hash, created_at) = row;
+    let (
+        id,
+        tag_id,
+        version,
+        body,
+        model_alias,
+        preset,
+        guide_text,
+        source_hash,
+        state,
+        created_at,
+    ) = row;
     SummaryVersionRow {
         id,
         tag_id,
@@ -214,6 +359,7 @@ fn row_from_tuple(row: SummaryRowTuple) -> SummaryVersionRow {
         preset,
         guide_text,
         source_hash,
+        state,
         created_at,
     }
 }

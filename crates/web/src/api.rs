@@ -6,13 +6,17 @@
 //! shared `strands-api-types` DTO. Same-origin `fetch` sends the session
 //! cookie automatically, so there is no credentials wiring to do here.
 
+// The API-backed screens land one at a time, so some client functions have no
+// caller in the bundle yet; that is expected rather than dead weight.
+#![allow(dead_code)]
+
 use gloo_net::http::{Request, RequestBuilder};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use strands_api_types::{
-    CategorySummary, ConnectorSummary, GenerateSummaryRequest, NewTag, NewThread, Profile,
-    SearchResult, SummaryHistory, SummaryVersion, TagDetail, TagSummary, ThreadDetail,
-    ThreadSummary,
+    CategorySummary, ConnectorSummary, EditSummaryRequest, GenerateSummaryRequest, NewTag,
+    NewThread, Profile, SearchResult, SummaryHistory, SummaryVersion, TagDetail, TagSummary,
+    ThreadDetail, ThreadSummary,
 };
 use uuid::Uuid;
 
@@ -87,9 +91,40 @@ pub async fn generate_summary(
     post_json(&format!("/api/v1/tags/{tag_id}/summary"), request).await
 }
 
-/// `GET /api/v1/tags/{id}/summary/history` — every version, newest first.
+/// `GET /api/v1/tags/{id}/summary/history` — every version, newest first, plus
+/// the version in force.
 pub async fn summary_history(tag_id: Uuid) -> Result<SummaryHistory, ApiError> {
     get_json(&format!("/api/v1/tags/{tag_id}/summary/history")).await
+}
+
+/// `POST /api/v1/tags/{id}/summary/{version}/approve` — commit a proposal. The
+/// answer is the tag's fresh review state, so one call updates the whole card.
+pub async fn approve_summary(tag_id: Uuid, summary_id: Uuid) -> Result<SummaryHistory, ApiError> {
+    send_json(Request::post(&review_path(tag_id, summary_id, "approve"))).await
+}
+
+/// `POST /api/v1/tags/{id}/summary/{version}/discard` — drop a proposal without
+/// applying it.
+pub async fn discard_summary(tag_id: Uuid, summary_id: Uuid) -> Result<SummaryHistory, ApiError> {
+    send_json(Request::post(&review_path(tag_id, summary_id, "discard"))).await
+}
+
+/// `POST /api/v1/tags/{id}/summary/{version}/edit` — record a rewrite as a new
+/// `edited` version; the original proposal is left untouched.
+pub async fn edit_summary(
+    tag_id: Uuid,
+    summary_id: Uuid,
+    body: &str,
+) -> Result<SummaryHistory, ApiError> {
+    let request = EditSummaryRequest {
+        body: body.to_owned(),
+    };
+    post_json(&review_path(tag_id, summary_id, "edit"), &request).await
+}
+
+/// The three review actions share a URL shape; only the last segment differs.
+fn review_path(tag_id: Uuid, summary_id: Uuid, action: &str) -> String {
+    format!("/api/v1/tags/{tag_id}/summary/{summary_id}/{action}")
 }
 
 /// `GET /api/v1/categories` — the caller's own categories, in seed order. Quick capture

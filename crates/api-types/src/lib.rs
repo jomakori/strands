@@ -18,6 +18,9 @@ pub use category::CategorySummary;
 pub use connector::{ConnectorStatus, ConnectorSummary};
 pub use me::Profile;
 pub use search::SearchResult;
-pub use summary::{GenerateSummaryRequest, SummaryGuide, SummaryHistory, SummaryVersion};
+pub use summary::{
+    EditSummaryRequest, GenerateSummaryRequest, MAX_SUMMARY_BODY_CHARS, SummaryGuide,
+    SummaryHistory, SummaryState, SummaryVersion,
+};
 pub use tag::{NewTag, TagDetail, TagSummary};
 pub use thread::{NewThread, ThreadDetail, ThreadSummary};
