@@ -65,6 +65,13 @@ test.describe("keyboard parity", () => {
     await expect(page.locator("#capture-body")).toBeFocused();
   });
 
+  test("comma opens settings", async ({ page }) => {
+    await openApp(page);
+
+    await page.keyboard.press(",");
+    await page.waitForURL(/\/settings$/);
+  });
+
   test("question mark shows the map and every ticket action is on it", async ({
     page,
   }) => {
@@ -78,6 +85,7 @@ test.describe("keyboard parity", () => {
     await expect(map).toContainText("Search notes");
     await expect(map).toContainText("Approve the pending summary");
     await expect(map).toContainText("Quick capture a note");
+    await expect(map).toContainText("Tap the card");
 
     // The close button is reachable, and the map closes with the pointer or the key.
     await expect(page.locator("#shortcut-close")).toBeFocused();

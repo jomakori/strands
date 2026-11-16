@@ -49,6 +49,7 @@ pub fn ShortcutMap() -> Element {
                     Section::Search,
                     Section::Review,
                     Section::Capture,
+                    Section::Account,
                 ] {
                     h3 { key: "{section.heading()}", class: "help__section", "{section.heading()}" }
                     dl { class: "help__list",
@@ -56,6 +57,7 @@ pub fn ShortcutMap() -> Element {
                             div { key: "{binding.keys}-{binding.label}", class: "help__row",
                                 dt { kbd { "{binding.keys}" } }
                                 dd { "{binding.label}" }
+                                dd { class: "help__touch", "{binding.touch}" }
                             }
                         }
                     }

@@ -57,6 +57,9 @@ pub fn Shell() -> Element {
             Action::OpenCapture => {
                 navigator.push(Route::Capture {});
             }
+            Action::OpenSettings => {
+                navigator.push(Route::Settings {});
+            }
             // Back replaces rather than pushes, so `Esc` out of a tag does not pile up
             // history entries the user then has to walk back through.
             Action::Back => {
