@@ -6,12 +6,14 @@ mod capture;
 mod constellation;
 mod data;
 mod detail;
+mod focus_trap;
 mod help;
 mod home;
 mod keys;
 mod routes;
 mod search;
 mod settings;
+mod state;
 
 use dioxus::prelude::*;
 

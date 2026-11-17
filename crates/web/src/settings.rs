@@ -11,13 +11,19 @@
 use dioxus::prelude::*;
 use strands_api_types::{ConnectorStatus, ConnectorSummary};
 
-use crate::api::{self, ApiError};
+use crate::api;
 use crate::routes::Route;
+use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 
 /// The whole settings screen: a back link, then the connector list.
 #[component]
 pub fn Settings() -> Element {
-    let connectors = use_resource(api::list_connectors);
+    // Bumping `attempt` is what a retry does: the resource re-runs when it changes.
+    let mut attempt = use_signal(|| 0_u32);
+    let connectors = use_resource(move || async move {
+        let _ = attempt();
+        api::list_connectors().await
+    });
 
     rsx! {
         div { class: "app",
@@ -30,9 +36,14 @@ pub fn Settings() -> Element {
                 div { class: "feed-inner",
                     h1 { class: "name", id: "settings-title", "Connectors" }
                     match &*connectors.read() {
-                        None => rsx! { p { class: "sub", "Loading connectors…" } },
+                        None => rsx! { Skeleton { lines: 3, label: "Loading connectors…" } },
                         Some(Ok(summaries)) => rsx! { ConnectorList { summaries: summaries.clone() } },
-                        Some(Err(error)) => rsx! { p { class: "sub", "Could not load connectors: {format_error(error)}" } },
+                        Some(Err(error)) => rsx! {
+                            RetryNotice {
+                                message: format!("Could not load connectors: {}", state::describe(error)),
+                                onretry: move |_| attempt += 1,
+                            }
+                        },
                     }
                 }
             }
@@ -44,7 +55,12 @@ pub fn Settings() -> Element {
 #[component]
 fn ConnectorList(summaries: Vec<ConnectorSummary>) -> Element {
     if summaries.is_empty() {
-        return rsx! { p { class: "sub", "No connectors registered." } };
+        return rsx! {
+            EmptyNotice {
+                title: "No connectors registered.".to_owned(),
+                hint: "Connectors appear here once the server has one configured.".to_owned(),
+            }
+        };
     }
 
     rsx! {
@@ -96,13 +112,5 @@ fn StatusChip(status: Option<ConnectorStatus>, has_error: bool) -> Element {
 
     rsx! {
         span { class: "status-chip", "data-status": "{key}", "{text}" }
-    }
-}
-
-/// Short, user-facing text for a failed fetch of the list itself (not a per-row error).
-fn format_error(error: &ApiError) -> String {
-    match error {
-        ApiError::Network(_) => "network error".to_owned(),
-        ApiError::Status(status) => format!("server returned {status}"),
     }
 }

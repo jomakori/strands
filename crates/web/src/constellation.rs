@@ -13,6 +13,7 @@ use strands_api_types::{LinkSummary, TagSummary};
 use uuid::Uuid;
 
 use crate::api;
+use crate::state::{self, RetryNotice, Skeleton};
 
 /// One node in the graph, whether or not it has an edge.
 struct Node {
@@ -95,13 +96,18 @@ pub fn Constellation() -> Element {
 
     let data = use_resource(move || async move {
         let _ = refresh();
-        let tags = api::list_tags().await.unwrap_or_default();
-        let links = api::list_links().await.unwrap_or_default();
-        (tags, links)
+        let tags = api::list_tags().await?;
+        let links = api::list_links().await?;
+        Ok::<_, api::ApiError>((tags, links))
     });
 
-    let (tags, links) = match &*data.read_unchecked() {
-        Some((tags, links)) => (tags.clone(), links.clone()),
+    let loading = data.read().is_none();
+    let failure = match &*data.read() {
+        Some(Err(error)) => Some(state::describe(error)),
+        _ => None,
+    };
+    let (tags, links) = match &*data.read() {
+        Some(Ok((tags, links))) => (tags.clone(), links.clone()),
         _ => (Vec::new(), Vec::new()),
     };
 
@@ -151,7 +157,14 @@ pub fn Constellation() -> Element {
                 p { class: "sub", "Tags that keep showing up together, and why." }
             }
 
-            if nodes.is_empty() {
+            if let Some(message) = failure {
+                RetryNotice {
+                    message: format!("Could not load the constellation: {message}"),
+                    onretry: move |_| refresh += 1,
+                }
+            } else if loading {
+                Skeleton { lines: 4, label: "Loading the constellation…" }
+            } else if nodes.is_empty() {
                 // Same empty-state shape as the grid and detail views: a quiet
                 // line of prose, no fake data.
                 p { class: "sub", "data-state": "empty",

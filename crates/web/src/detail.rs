@@ -16,6 +16,7 @@ use crate::data::{self, Tag, ThreadPreview};
 use crate::home::{CatGlyph, Grid};
 use crate::keys::Shortcuts;
 use crate::routes::Route;
+use crate::state::{EmptyNotice, RetryNotice, Skeleton};
 
 /// The whole detail screen: a back link, the tag card, and the path stack.
 #[component]
@@ -296,17 +297,30 @@ fn SummaryCard(tag_id: String) -> Element {
     let mut draft = use_signal(String::new);
     let shortcuts = use_context::<Shortcuts>();
 
-    // Load the history once the card mounts.
+    // Load the history whenever the card mounts or a retry bumps the attempt.
+    let mut history_attempt = use_signal(|| 0_u32);
+    let mut history_error = use_signal(|| None::<String>);
+    let mut history_loading = use_signal(|| tag_uuid.is_some());
     use_future(move || async move {
         let Some(id) = tag_uuid else {
             return;
         };
+        let _ = history_attempt();
+        history_loading.set(true);
         match api::summary_history(id).await {
             Ok(history) => {
+                history_error.set(None);
+                history_loading.set(false);
                 versions.set(history.versions);
                 approved.set(history.approved_version_id);
             }
-            Err(error) => notice.set(Some(format!("Summary history unavailable: {error}"))),
+            Err(error) => {
+                history_loading.set(false);
+                history_error.set(Some(format!(
+                    "Summary history unavailable: {}",
+                    crate::state::describe(&error)
+                )));
+            }
         }
     });
 
@@ -604,6 +618,21 @@ fn SummaryCard(tag_id: String) -> Element {
             }
             if let Some(message) = notice() {
                 p { class: "sub summary-notice", "{message}" }
+            }
+            if let Some(message) = history_error() {
+                RetryNotice {
+                    message,
+                    onretry: move |_| history_attempt += 1,
+                }
+            }
+            if history_loading() {
+                Skeleton { lines: 2, label: "Loading summary history…" }
+            }
+            if !history_loading() && history_error().is_none() && rows.is_empty() {
+                EmptyNotice {
+                    title: "No summaries yet.".to_owned(),
+                    hint: "Generate one from the transcript to start a version history.".to_owned(),
+                }
             }
             if !rows.is_empty() {
                 div { class: "summary-history-head",
