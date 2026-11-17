@@ -1,0 +1,36 @@
+# What the image build does not need. `target/` is the expensive one: a host
+# `cargo build` directory is gigabytes wide and the builder compiles its own —
+# and a stale one copied in would also let a poisoned artifact into the image.
+target/
+**/target/
+
+# The bundle is a build output, produced inside the image. A stale copy from a
+# developer's machine would ship a bundle no CI job verified.
+dist/
+
+node_modules/
+.venv/
+
+# `.git` is not needed to build: the workflow passes the commit in as
+# `GIT_COMMIT`. Copying it would also bloat every layer with full history.
+.git/
+.github/
+
+# Present in the repository, never read by the build. Only `Cargo.toml`,
+# `Cargo.lock`, `crates/` and `migrations/` are copied in, so keeping these out
+# of the context is about the upload, not correctness.
+docs/
+e2e/
+media/
+
+# Local state, scratch, and anything a test run leaves behind.
+.omo/
+.omo-plans/
+tmp/
+coverage/
+*.log
+.DS_Store
+
+# Tooling config the build never reads.
+.pre-commit-config.yaml
+.editorconfig

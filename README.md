@@ -60,7 +60,8 @@ is held, so typing never fires a chord.
 
 ```sh
 cargo run -p strands-server
-curl http://localhost:8080/healthz   # => {"status":"ok"}
+curl http://localhost:8080/healthz
+# => {"commit":"<short sha>","status":"ok","version":"0.1.0"}
 ```
 
 The SPA needs the dioxus CLI:
@@ -68,31 +69,67 @@ The SPA needs the dioxus CLI:
 ```sh
 cargo install dioxus-cli --version 0.7.10 --locked
 dx build --package strands-web --platform web --release
+
+# Point the server at what `dx` just wrote; `dist` below is what the image
+# uses, so a plain `cargo run` serves the API only.
+STRANDS_ASSETS_DIR=$(find target/dx -type d -path '*/release/web/public' | head -n1) \
+  cargo run -p strands-server
 ```
+
+### The image
+
+The deployable is one image: the same process answers `/api` and serves the
+bundle, so there is no second web tier and no way for the two to disagree about
+the release.
+
+```sh
+docker build -t strands .
+docker run --rm -p 8080:8080 \
+  -e DATABASE_URL=postgres://strands:***@host/strands \
+  -e OIDC_ISSUER=https://dex.maklab.net -e OIDC_CLIENT_ID=strands \
+  -e PUBLIC_BASE_URL=http://localhost:8080 -e SESSION_COOKIE_SECURE=false \
+  strands
+```
+
+`.github/workflows/publish-image.yml` publishes to `ghcr.io/jomakori/strands`
+for `linux/amd64` and `linux/arm64` on a `v*` tag (or by hand), tagging
+`1.2.3`, `sha-<short>`, and `latest` — `latest` only on a tag, never on a bare
+commit. Images run as uid `10001`, listen on `8080`, and carry the bundle at
+`/app/dist`.
+
+Migrations are **embedded** (`sqlx::migrate!("../../migrations")` in
+`crates/server/src/db.rs`), so the schema travels inside the binary and the
+runtime image ships no `migrations/` directory: adding a migration needs a new
+image, not a new volume.
 
 ## Configuration
 
-The server refuses to boot without its auth credentials rather than starting up
+The server refuses to boot without its auth settings rather than starting up
 half-configured: `main` exits with a clear message instead of failing on the
-first login.
+first login. Since T20c the app is a **public OIDC client of the cluster's Dex
+broker** — Dex holds the one Google client the cluster registers, and every app
+is a Dex client with PKCE and no secret. There is nothing secret to configure.
 
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `DATABASE_URL` | yes | — | Postgres URL; migrations run on boot |
-| `GOOGLE_CLIENT_ID` | yes | — | OAuth client id from the Google Cloud console |
-| `GOOGLE_CLIENT_SECRET` | yes | — | OAuth client secret. **Never** commit it; supply it from the environment or the secret store (Doppler → ExternalSecret → env) |
-| `PUBLIC_BASE_URL` | no | `http://localhost:8080` | Public origin, no trailing slash. The redirect URI is `${PUBLIC_BASE_URL}/auth/google/callback` and must be registered byte for byte in the Google console |
+| `OIDC_ISSUER` | yes | — | Issuer URL of the broker, e.g. `https://dex.maklab.net`. Endpoints come from `${OIDC_ISSUER}/.well-known/openid-configuration`, fetched once at boot |
+| `OIDC_CLIENT_ID` | yes | — | Public client id registered at that issuer (`strands`). Not a secret — it is in the browser's URL bar |
+| `PUBLIC_BASE_URL` | no | `http://localhost:8080` | Public origin, no trailing slash. The redirect URI is `${PUBLIC_BASE_URL}/auth/google/callback` and must be registered byte for byte in the issuer's client config (`redirectURIs`) |
 | `SESSION_COOKIE_SECURE` | no | `true` | `Secure` on the session cookie. Set `false` only for a local plain-HTTP run |
 | `SESSION_TTL_DAYS` | no | `30` | Session lifetime, matching spec §6 |
-| `GOOGLE_AUTHORIZATION_ENDPOINT` / `GOOGLE_TOKEN_ENDPOINT` | no | Google's | Overrides, for a fake provider or a test double (endpoints are strings, so nothing here needs Google at build time) |
+| `STRANDS_ASSETS_DIR` | no | `dist` | The `dx` bundle to serve at the site root. Unset with no `dist/` is a plain API-only dev run; **set** and missing fails at boot, because that is a broken image rather than a missing dev build |
 | `STRANDS_TEST_REQUIRE_DB` | no | unset | Test-only. When `1`, an unreachable `DATABASE_URL` fails a test instead of skipping; the CI `schema` job sets it so a broken service container cannot pass as "skipped" |
 | `STRANDS_CONNECTOR_SECRET_KEY` | no | unset | 32 bytes, base64. Encrypts `connector_secrets` (the WhatsApp session row). Without it the WhatsApp endpoints answer "not configured" instead of half-working |
 | `STRANDS_WHATSAPP_PAIR_PHONE` | no | unset | E.164 number to offer pairing-by-code as well as by QR |
 
+There is no client-secret variable: a public client has no secret, so a deploy
+that has no secret is complete. Nothing in this repository reads one.
+
 ```sh
 export DATABASE_URL=postgres://strands:strands@localhost/strands
-export GOOGLE_CLIENT_ID=...apps.googleusercontent.com
-export GOOGLE_CLIENT_SECRET=...            # from the secret store, not a file in the repo
+export OIDC_ISSUER=https://dex.maklab.net   # or a local stub's origin
+export OIDC_CLIENT_ID=strands
 export PUBLIC_BASE_URL=http://localhost:8080
 export SESSION_COOKIE_SECURE=false         # local HTTP only
 cargo run -p strands-server
@@ -101,11 +138,21 @@ cargo run -p strands-server
 ### Auth flow
 
 ```
-GET  /auth/google           → 303 to Google's consent screen (state + PKCE S256, stored server-side)
-GET  /auth/google/callback  → exchange the code, upsert the user, seed 5 categories,
-                              set the session cookie, 303 to /
+GET  /auth/google           → 303 to the issuer's authorize endpoint (state + nonce + PKCE S256;
+                              the verifier is stored server-side against the state, never sent)
+GET  /auth/google/callback  → exchange code + verifier (no secret), read identity from /userinfo,
+                              upsert the user, seed 5 categories, set the session cookie, 303 to /
 POST /auth/logout           → 204, session row deleted, cookie cleared
 ```
+
+Identity is taken from the issuer's `/userinfo` endpoint with the access token,
+never by parsing the `id_token` — an unverified claim would be worth nothing, and
+verifying one properly needs JWKS/RS256 plumbing this app does not have. The
+trust argument: the access token was returned to *this process* by the token
+endpoint over TLS in the direct response to our own POST, and the code that
+produced it was bound to this browser by the single-use `state` and the PKCE
+verifier. A nonce is sent on the authorize request because OIDC asks for one, but
+nothing compares it: there is no `id_token` consumption to compare it against.
 
 The cookie (`strands_session`) carries only the opaque `sessions.id` — no access
 token, no email, nothing a client could replay at Google. It is `HttpOnly;

@@ -121,12 +121,10 @@ impl Harness {
             pool.clone(),
             AuthConfig {
                 client_id: "unused-client-id".into(),
-                client_secret: "unused-client-secret".into(),
+                issuer: "https://identity.example".into(),
                 public_base_url: "https://test.example".into(),
                 cookie_secure: true,
                 session_ttl_days: 30,
-                authorization_endpoint: "https://identity.example/authorize".into(),
-                token_endpoint: "https://identity.example/token".into(),
             },
             Arc::new(UnusedIdentity),
             Arc::new(Registry::new()),

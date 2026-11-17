@@ -35,6 +35,11 @@ strands-connector-photos = { path = "../connector-photos" }
 strands-core = { path = "../core" }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+# `util` for `ServiceExt::oneshot`: the bundle is served by driving
+# tower-http's `ServeDir`/`ServeFile` from a handler, which is what gets the
+# content type, conditional requests and traversal refusal right (T20a).
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["fs"] }
 uuid = { version = "1", features = ["v4"] }
 whatsapp-rust = { version = "0.7", default-features = false, features = [
   "tokio-transport",
@@ -48,5 +53,4 @@ whatsapp-rust = { version = "0.7", default-features = false, features = [
 [dev-dependencies]
 # KML well-formedness is asserted by parsing it, not by matching strings.
 quick-xml = "0.37"
-tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

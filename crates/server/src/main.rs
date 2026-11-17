@@ -8,13 +8,14 @@ use strands_connector_photos::GooglePicker;
 use strands_core::Registry;
 use strands_core::connector::{FailingConnector, PlaceholderConnector, StubConnector};
 use strands_server::app::{AppState, router};
-use strands_server::auth::identity::GoogleIdentityProvider;
+use strands_server::auth::identity::OidcIdentityProvider;
 use strands_server::config::AuthConfig;
 use strands_server::db;
 use strands_server::gmaps::places::PlacesApiResolver;
 use strands_server::links::LiteLlmJudge;
 use strands_server::llm::LiteLlmClient;
 use strands_server::secrets::SecretKey;
+use strands_server::static_files::Assets;
 use strands_server::summary::LiteLlmSummarizer;
 use strands_server::tagging::LiteLlmTagger;
 use strands_server::whatsapp::bridge::Registry as WhatsAppRegistry;
@@ -28,13 +29,22 @@ async fn main() {
         .await
         .expect("connect to Postgres and apply migrations");
 
-    // Fail at boot, not on the first login: a missing client id/secret is a
-    // deployment mistake, and the process should never appear healthy without
-    // the credentials its only auth flow needs.
-    let auth = AuthConfig::from_env()
-        .expect("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set (see README)");
-    let identity =
-        GoogleIdentityProvider::from_config(&auth).expect("build the Google identity provider");
+    // Fail at boot, not on the first login: config errors and an unreachable
+    // issuer are deployment mistakes, and the process should never appear
+    // healthy without the settings its only auth flow needs. There is no client
+    // secret to require — the app is a public Dex client (see README).
+    let auth =
+        AuthConfig::from_env().expect("OIDC_ISSUER and OIDC_CLIENT_ID must be set (see README)");
+    let identity = OidcIdentityProvider::discover(&auth)
+        .await
+        .unwrap_or_else(|error| panic!("discover OIDC endpoints: {error}"));
+    eprintln!(
+        "strands: OIDC issuer {} → authorize {}, token {}, userinfo {}",
+        auth.issuer,
+        identity.endpoints().authorization,
+        identity.endpoints().token,
+        identity.endpoints().userinfo,
+    );
 
     let registry = build_registry();
 
@@ -112,6 +122,29 @@ async fn main() {
             );
             state
         }
+    };
+
+    // The browser is served by this process (spec §6, one deployable): the
+    // wasm bundle at the site root, the API under `/api`. A dev run without a
+    // bundle still answers the API, which is worth having on its own.
+    let state = match Assets::resolve() {
+        Ok(Some(assets)) => {
+            eprintln!(
+                "strands: serving the web bundle from {}",
+                assets.dir().display()
+            );
+            state.with_assets(Some(assets))
+        }
+        Ok(None) => {
+            eprintln!(
+                "strands: no web bundle found (STRANDS_ASSETS_DIR unset and ./dist missing); \
+                 serving the API only"
+            );
+            state
+        }
+        // An explicitly configured bundle path that is not there is a
+        // packaging mistake — say so at boot instead of 404ing the site.
+        Err(error) => panic!("serve the web bundle: {error}"),
     };
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
