@@ -12,3 +12,8 @@ reqwest = { version = "0.12", default-features = false, features = [
 ] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+
+[dev-dependencies]
+# The picker tests drive a throwaway HTTP server on localhost: the client under
+# test is the real one, so it needs a real socket to talk to.
+tokio = { version = "1", features = ["macros", "net", "io-util", "rt-multi-thread"] }

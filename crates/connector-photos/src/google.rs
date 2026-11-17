@@ -30,6 +30,19 @@ impl GooglePicker {
         })
     }
 
+    /// Talk to something other than `photospicker.googleapis.com`.
+    ///
+    /// Only the HTTP tests use this: they need the real client, the real socket
+    /// and the real JSON, but not Google. Production always goes through
+    /// [`GooglePicker::new`], so there is no configuration that can point a
+    /// deployed process at a fake.
+    pub fn with_api_base(api_base: impl Into<String>) -> Result<Self, reqwest::Error> {
+        Ok(Self {
+            client: Client::builder().build()?,
+            api_base: api_base.into(),
+        })
+    }
+
     async fn session_body(&self, access_token: &str) -> Result<SessionBody, PhotosError> {
         let response = self
             .client
