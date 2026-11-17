@@ -846,6 +846,7 @@ mod tests {
             types: vec!["deli".to_owned()],
             metro: Some("New York County".to_owned()),
             locality: Some("New York".to_owned()),
+            state: Some("New York".to_owned()),
             country: Some("United States".to_owned()),
         }));
         let write = PlaceWrite::new(Uuid::nil(), Uuid::nil(), &place, &outcome);

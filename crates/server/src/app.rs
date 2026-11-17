@@ -26,6 +26,7 @@ use crate::ingest::routes as ingest_routes;
 use crate::links::handlers::routes as link_routes;
 use crate::links::{Judge, UnconfiguredJudge};
 use crate::photos::routes as photos_routes;
+use crate::places::routes as places_routes;
 use crate::search::routes as search_routes;
 use crate::secrets::SecretKey;
 use crate::summary::Summarizer;
@@ -163,6 +164,7 @@ pub fn router(state: AppState) -> Router {
         .merge(ingest_routes())
         .merge(link_routes())
         .merge(photos_routes())
+        .merge(places_routes())
         .merge(search_routes())
         .merge(summary_routes())
         .merge(whatsapp_routes())
