@@ -58,9 +58,44 @@ test.describe("search sheet", () => {
 
     const sheet = page.locator("#search-sheet");
     await expect(sheet.locator(".sheet__heading")).toHaveText("Results");
-    // With no API behind the static bundle the answer is empty; what matters is that the
-    // request path completed and the sheet stayed open instead of blowing up.
-    await expect(sheet.locator(".sheet__empty")).toBeVisible();
+
+    // T18: a search that cannot be answered is a failure with a control, never a
+    // dead sentence. The static bundle has no API, so the first request fails; the
+    // button must re-issue it and the second answer must paint.
+    const notice = sheet.locator(".load-error");
+    await expect(notice).toBeVisible();
+    await expect(notice.locator(".load-error-text")).toContainText("Search failed");
+
+    const retry = notice.locator("button[data-retry]");
+    await expect(retry).toBeEnabled();
+    await expect(retry).toHaveText(/try again/i);
+    // A control you can actually press: at least a 40px tap target at every width.
+    const box = await retry.boundingBox();
+    expect(box?.height ?? 0).toBeGreaterThanOrEqual(40);
+
+    // The retry is what proves the request is re-issued, so count the requests.
+    let requests = 0;
+    await page.route("**/api/v1/search*", async (route) => {
+      requests += 1;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify([
+          {
+            id: "b3b8b0f4-0b3e-4a5f-9c1e-1f4f2a6d1c11",
+            title: "Kumquat tasting",
+            snippet: "kumquat, candied",
+            tag_id: "6a1a3f6e-5b1b-4a2f-8d3e-6f9c1b2a4d55",
+            tag_name: "food",
+          },
+        ]),
+      });
+    });
+
+    await retry.click();
+    await expect(sheet.locator(".load-error")).toHaveCount(0);
+    await expect(sheet.locator(".sheet__results")).toContainText("Kumquat tasting");
+    expect(requests).toBeGreaterThan(0);
 
     await page.screenshot({
       path: `captures/${testInfo.project.name}-search-results.png`,
