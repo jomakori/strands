@@ -36,6 +36,11 @@ strands-core = { path = "../core" }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 uuid = { version = "1", features = ["v4"] }
+whatsapp-rust = { version = "0.7", default-features = false, features = [
+  "tokio-transport",
+  "tokio-runtime",
+  "tokio-native",
+] }
 
 [dev-dependencies]
 # KML well-formedness is asserted by parsing it, not by matching strings.
