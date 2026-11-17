@@ -288,6 +288,73 @@ impl Harness {
         summary_id
     }
 
+    /// A judged similarity row between two of one owner's tags.
+    async fn create_link(&self, user_id: UserId, tag_a: Uuid, tag_b: Uuid) {
+        let (a, b) = if tag_a < tag_b {
+            (tag_a, tag_b)
+        } else {
+            (tag_b, tag_a)
+        };
+        sqlx::query(
+            "INSERT INTO links (id, user_id, a_tag_id, b_tag_id, score, rationale) \
+             VALUES ($1, $2, $3, $4, 88, 'same trip')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(a)
+        .bind(b)
+        .execute(&self.pool)
+        .await
+        .expect("insert link");
+    }
+
+    async fn create_list(&self, user_id: UserId, name: &str) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO lists (id, user_id, name, source) VALUES ($1, $2, $3, 'import')")
+            .bind(id)
+            .bind(user_id)
+            .bind(name)
+            .execute(&self.pool)
+            .await
+            .expect("insert list");
+        id
+    }
+
+    async fn create_place(&self, user_id: UserId, list_id: Uuid, name: &str) {
+        sqlx::query(
+            "INSERT INTO places (id, user_id, list_id, name, source) \
+             VALUES ($1, $2, $3, $4, 'import')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(list_id)
+        .bind(name)
+        .execute(&self.pool)
+        .await
+        .expect("insert place");
+    }
+
+    /// A connected connector and the ciphertext that keeps it connected: the
+    /// rows a data wipe has to unlink, or the login outlives the account's data.
+    async fn create_connector(&self, user_id: UserId) {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO connectors (id, user_id, kind) VALUES ($1, $2, 'google')")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .expect("insert connector");
+        sqlx::query(
+            "INSERT INTO connector_secrets (connector_id, user_id, ciphertext) VALUES ($1, $2, $3)",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(vec![0u8, 1, 2, 3])
+        .execute(&self.pool)
+        .await
+        .expect("insert connector secret");
+    }
+
     async fn count(&self, table: &str, user_id: UserId) -> i64 {
         // `table` is a literal from this file, never user input.
         let sql = format!("SELECT count(*) FROM {table} WHERE user_id = $1");
@@ -531,6 +598,112 @@ async fn deleting_my_data_erases_only_my_rows_and_keeps_my_account() {
     assert!(
         bob_export.to_string().contains(&bob_tag.to_string()),
         "{bob_export}"
+    );
+}
+
+/// The two halves of data control have to agree: everything a wipe destroys is
+/// something the user was able to export first. The table list is read from the
+/// delete path itself, so a collection added to one side alone fails here.
+#[tokio::test]
+async fn the_export_carries_every_collection_the_delete_removes() {
+    const STORE: &str = include_str!("../src/account/store.rs");
+    /// Rows the export deliberately leaves out: connective rows, machine state,
+    /// and the ciphertext that must never leave the database.
+    const NOT_EXPORTED: &[&str] = &[
+        "summary_notes",
+        "jobs",
+        "import_runs",
+        "connector_secrets",
+        "connectors",
+    ];
+    const EXPORTED: &[&str] = &[
+        "tags",
+        "threads",
+        "notes",
+        "summaries",
+        "links",
+        "lists",
+        "places",
+    ];
+
+    let deleted: Vec<&str> = STORE
+        .match_indices("DELETE FROM ")
+        .map(|(at, needle)| {
+            STORE[at + needle.len()..]
+                .split_whitespace()
+                .next()
+                .expect("a table name follows DELETE FROM")
+        })
+        .collect();
+
+    for table in &deleted {
+        assert!(
+            EXPORTED.contains(table) || NOT_EXPORTED.contains(table),
+            "`{table}` is wiped but never exported: give it an export field or name it in NOT_EXPORTED"
+        );
+    }
+
+    let Some(harness) = Harness::connect("account::export_covers_delete").await else {
+        return;
+    };
+
+    let alice = harness.login("alice").await;
+    let bob = harness.login("bob").await;
+    let alice_id = harness.user_id(&alice).await;
+    let bob_id = harness.user_id(&bob).await;
+
+    let first = harness.create_tag(alice_id, "Tokyo").await;
+    let second = harness.create_tag(alice_id, "Kyoto").await;
+    harness.create_link(alice_id, first, second).await;
+    let list = harness.create_list(alice_id, "Saved 2024").await;
+    harness.create_place(alice_id, list, "Nishiki Market").await;
+    harness.create_connector(alice_id).await;
+    harness.create_connector(bob_id).await;
+
+    let (status, _, export) = harness.get("/api/v1/account/export", Some(&alice)).await;
+    assert_eq!(status, StatusCode::OK, "export body: {export}");
+    assert_eq!(
+        export["links"].as_array().map(Vec::len),
+        Some(1),
+        "{export}"
+    );
+    assert_eq!(
+        export["lists"].as_array().map(Vec::len),
+        Some(1),
+        "{export}"
+    );
+    assert_eq!(
+        export["places"].as_array().map(Vec::len),
+        Some(1),
+        "{export}"
+    );
+    assert_eq!(export["places"][0]["name"], "Nishiki Market", "{export}");
+
+    let (status, _, body) = harness.delete("/api/v1/account/data", Some(&alice)).await;
+    assert_eq!(status, StatusCode::NO_CONTENT, "delete body: {body}");
+
+    for table in [
+        "links",
+        "lists",
+        "places",
+        "connectors",
+        "connector_secrets",
+    ] {
+        assert_eq!(
+            harness.count(table, alice_id).await,
+            0,
+            "`{table}` survived the wipe"
+        );
+    }
+    assert_eq!(
+        harness.count("connectors", bob_id).await,
+        1,
+        "bob's login was collateral"
+    );
+    assert_eq!(
+        harness.count("connector_secrets", bob_id).await,
+        1,
+        "bob's secret was collateral"
     );
 }
 
