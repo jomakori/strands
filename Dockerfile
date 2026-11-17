@@ -26,7 +26,10 @@ RUN rustup target add wasm32-unknown-unknown
 # compiling it costs minutes per architecture (much more under QEMU for the
 # arm64 half) and would need OpenSSL headers in the builder for nothing. The
 # release tarball is the same binary, pinned to the version lint-test.yml uses.
+# A global ARG is not visible inside a stage: it has to be re-declared before
+# the RUN that reads it, or bash sees an unbound variable.
 ARG TARGETARCH
+ARG DIOXUS_CLI_VERSION
 RUN <<EOF
 set -euo pipefail
 case "${TARGETARCH}" in
