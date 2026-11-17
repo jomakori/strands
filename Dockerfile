@@ -12,7 +12,7 @@ ARG RUST_VERSION=1.98
 ARG DIOXUS_CLI_VERSION=0.7.10
 
 # ---- build -----------------------------------------------------------------
-FROM rust:${RUST_VERSION}-bookworm AS build
+FROM rust:${RUST_VERSION}-trixie AS build
 
 # The base image's `/bin/sh` is dash, which has no `pipefail`; the heredoc step
 # below sets it because a silent `curl | tar` failure would otherwise leave a
@@ -26,6 +26,9 @@ RUN rustup target add wasm32-unknown-unknown
 # compiling it costs minutes per architecture (much more under QEMU for the
 # arm64 half) and would need OpenSSL headers in the builder for nothing. The
 # release tarball is the same binary, pinned to the version lint-test.yml uses.
+# Both stages are trixie (glibc 2.41) because that release is linked against
+# glibc 2.39 and bookworm ships 2.36: on bookworm `dx` dies with
+# `version GLIBC_2.39 not found` before it builds anything.
 # A global ARG is not visible inside a stage: it has to be re-declared before
 # the RUN that reads it, or bash sees an unbound variable.
 ARG TARGETARCH
@@ -70,7 +73,7 @@ RUN dx build --package strands-web --platform web --release \
 # thing it needs at runtime is a CA store for outbound HTTPS (rustls, so no
 # OpenSSL). A shell is kept for `kubectl exec`, which is worth more than the
 # handful of megabytes distroless would save.
-FROM debian:bookworm-slim AS runtime
+FROM debian:trixie-slim AS runtime
 
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends ca-certificates \
