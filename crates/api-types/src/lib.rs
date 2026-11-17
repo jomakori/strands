@@ -11,6 +11,7 @@ mod category;
 mod connector;
 mod gmaps;
 mod ingest;
+mod link;
 mod me;
 mod search;
 mod summary;
@@ -25,6 +26,7 @@ pub use category::CategorySummary;
 pub use connector::{ConnectorStatus, ConnectorSummary};
 pub use gmaps::{GmapsFormat, GmapsIngestResult, PlaceEnrichment, PlaceListSummary, PlaceSummary};
 pub use ingest::{IngestItem, IngestRequest, IngestResult};
+pub use link::{JudgeLinksResponse, LinkSummary};
 pub use me::Profile;
 pub use search::SearchResult;
 pub use summary::{

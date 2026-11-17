@@ -144,6 +144,13 @@ jobs:
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test gmaps_ingest
+      # Ticket T10: judging needs real rows because idempotence is enforced by
+      # the unique index on the ordered pair. The judge is a fake, so no test
+      # here reaches the network or spends model tokens.
+      - name: Run the link judging acceptance test
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --test links
 
   wasm-build:
     name: Build the WASM bundle

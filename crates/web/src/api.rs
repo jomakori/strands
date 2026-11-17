@@ -14,9 +14,9 @@ use gloo_net::http::{Request, RequestBuilder};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use strands_api_types::{
-    CategorySummary, ConnectorSummary, EditSummaryRequest, GenerateSummaryRequest, NewTag,
-    NewThread, Profile, SearchResult, SummaryHistory, SummaryVersion, TagDetail, TagSummary,
-    ThreadDetail, ThreadSummary,
+    CategorySummary, ConnectorSummary, EditSummaryRequest, GenerateSummaryRequest,
+    JudgeLinksResponse, LinkSummary, NewTag, NewThread, Profile, SearchResult, SummaryHistory,
+    SummaryVersion, TagDetail, TagSummary, ThreadDetail, ThreadSummary,
 };
 use uuid::Uuid;
 
@@ -173,6 +173,18 @@ pub async fn delete_my_data() -> Result<(), ApiError> {
         return Err(ApiError::Status(response.status()));
     }
     Ok(())
+}
+
+/// `GET /api/v1/links` — every judged tag pair, strongest first. The constellation
+/// draws nodes and edges from this one payload.
+pub async fn list_links() -> Result<Vec<LinkSummary>, ApiError> {
+    get_json("/api/v1/links").await
+}
+
+/// `POST /api/v1/links/judge` — re-judge the current evidence and report what
+/// changed. Nothing to compare is a success with `judged: 0`.
+pub async fn judge_links() -> Result<JudgeLinksResponse, ApiError> {
+    send_json(Request::post("/api/v1/links/judge")).await
 }
 
 /// Where the export download points. An anchor with `download` lets the browser
