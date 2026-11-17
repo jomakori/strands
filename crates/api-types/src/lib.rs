@@ -17,7 +17,8 @@ mod tag;
 mod thread;
 
 pub use account::{
-    AccountExport, EXPORT_FORMAT_VERSION, ExportNote, ExportSummary, ExportTag, ExportThread,
+    AccountExport, EXPORT_FORMAT_VERSION, ExportLink, ExportList, ExportNote, ExportPlace,
+    ExportSummary, ExportTag, ExportThread,
 };
 pub use category::CategorySummary;
 pub use connector::{ConnectorStatus, ConnectorSummary};

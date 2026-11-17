@@ -8,8 +8,8 @@
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use strands_api_types::{
-    AccountExport, EXPORT_FORMAT_VERSION, ExportNote, ExportSummary, ExportTag, ExportThread,
-    SummaryVersion,
+    AccountExport, EXPORT_FORMAT_VERSION, ExportLink, ExportList, ExportNote, ExportPlace,
+    ExportSummary, ExportTag, ExportThread, SummaryVersion,
 };
 use strands_core::UserId;
 use uuid::Uuid;
@@ -40,6 +40,9 @@ pub async fn export(pool: &PgPool, user_id: UserId) -> Result<Option<AccountExpo
         notes: notes(pool, user_id).await?,
         summaries: summaries(pool, user_id).await?,
         summary_versions: summary_versions(pool, user_id).await?,
+        links: links(pool, user_id).await?,
+        lists: lists(pool, user_id).await?,
+        places: places(pool, user_id).await?,
     }))
 }
 
@@ -221,10 +224,111 @@ async fn summary_versions(
 /// start over), the seeded `categories` (configuration, not content), and the
 /// `connectors` rows (which provider accounts are linked, not what was imported
 /// from them).
+async fn links(pool: &PgPool, user_id: UserId) -> Result<Vec<ExportLink>, sqlx::Error> {
+    let rows: Vec<(Uuid, Uuid, Uuid, i32, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT id, a_tag_id, b_tag_id, score, rationale, judged_at FROM links \
+         WHERE user_id = $1 ORDER BY judged_at, id",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, a_tag_id, b_tag_id, score, rationale, judged_at)| ExportLink {
+                id,
+                a_tag_id,
+                b_tag_id,
+                score,
+                rationale,
+                judged_at,
+            },
+        )
+        .collect())
+}
+
+async fn lists(pool: &PgPool, user_id: UserId) -> Result<Vec<ExportList>, sqlx::Error> {
+    let rows: Vec<(Uuid, String, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, name, source, import_run_id FROM lists WHERE user_id = $1 \
+         ORDER BY name, id",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, source, import_run_id)| ExportList {
+            id,
+            name,
+            source,
+            import_run_id,
+        })
+        .collect())
+}
+
+async fn places(pool: &PgPool, user_id: UserId) -> Result<Vec<ExportPlace>, sqlx::Error> {
+    let rows: Vec<PlaceRow> = sqlx::query_as(
+        "SELECT id, list_id, tag_id, name, address, lat, lng, place_id, primary_type, \
+         types, metro, locality, country, notes, source, enriched_at FROM places \
+         WHERE user_id = $1 ORDER BY name, id",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| ExportPlace {
+            id: row.id,
+            list_id: row.list_id,
+            tag_id: row.tag_id,
+            name: row.name,
+            address: row.address,
+            lat: row.lat,
+            lng: row.lng,
+            place_id: row.place_id,
+            primary_type: row.primary_type,
+            types: row.types,
+            metro: row.metro,
+            locality: row.locality,
+            country: row.country,
+            notes: row.notes,
+            source: row.source,
+            enriched_at: row.enriched_at,
+        })
+        .collect())
+}
+
+/// The places columns as they come back, so the sixteen of them stay readable
+/// at the call site instead of as a tuple nobody can count.
+#[derive(sqlx::FromRow)]
+struct PlaceRow {
+    id: Uuid,
+    list_id: Option<Uuid>,
+    tag_id: Option<Uuid>,
+    name: String,
+    address: Option<String>,
+    lat: Option<f64>,
+    lng: Option<f64>,
+    place_id: Option<String>,
+    primary_type: Option<String>,
+    types: Vec<String>,
+    metro: Option<String>,
+    locality: Option<String>,
+    country: Option<String>,
+    notes: Option<String>,
+    source: String,
+    enriched_at: Option<DateTime<Utc>>,
+}
+
 pub async fn delete_all(pool: &PgPool, user_id: UserId) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
     for statement in [
+        "DELETE FROM connector_secrets WHERE user_id = $1",
+        "DELETE FROM connectors WHERE user_id = $1",
         "DELETE FROM summary_notes WHERE user_id = $1",
         "DELETE FROM links WHERE user_id = $1",
         "DELETE FROM notes WHERE user_id = $1",

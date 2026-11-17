@@ -21,7 +21,7 @@ use crate::summary::SummaryVersion;
 pub const EXPORT_FORMAT_VERSION: u32 = 1;
 
 /// Everything the caller owns, in one document.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountExport {
     pub format_version: u32,
     pub exported_at: DateTime<Utc>,
@@ -35,6 +35,9 @@ pub struct AccountExport {
     pub summaries: Vec<ExportSummary>,
     /// Every version ever generated, including the discarded ones.
     pub summary_versions: Vec<SummaryVersion>,
+    pub links: Vec<ExportLink>,
+    pub lists: Vec<ExportList>,
+    pub places: Vec<ExportPlace>,
 }
 
 /// One `tags` row.
@@ -77,6 +80,48 @@ pub struct ExportNote {
 pub struct ExportSummary {
     pub tag_id: Uuid,
     pub version_id: Uuid,
+}
+
+/// A judged tag-to-tag similarity. It is in the export because the account
+/// paid a model for it, and a restore should not have to judge again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportLink {
+    pub id: Uuid,
+    pub a_tag_id: Uuid,
+    pub b_tag_id: Uuid,
+    pub score: i32,
+    pub rationale: String,
+    pub judged_at: DateTime<Utc>,
+}
+
+/// An imported list: the container a batch of places arrived in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportList {
+    pub id: Uuid,
+    pub name: String,
+    pub source: String,
+    pub import_run_id: Option<Uuid>,
+}
+
+/// One row of a list, enriched with what the place lookup knows.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ExportPlace {
+    pub id: Uuid,
+    pub list_id: Option<Uuid>,
+    pub tag_id: Option<Uuid>,
+    pub name: String,
+    pub address: Option<String>,
+    pub lat: Option<f64>,
+    pub lng: Option<f64>,
+    pub place_id: Option<String>,
+    pub primary_type: Option<String>,
+    pub types: Vec<String>,
+    pub metro: Option<String>,
+    pub locality: Option<String>,
+    pub country: Option<String>,
+    pub notes: Option<String>,
+    pub source: String,
+    pub enriched_at: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]
@@ -129,6 +174,38 @@ mod tests {
                 model_alias: "strands.summary".to_owned(),
                 state: crate::summary::SummaryState::Approved,
                 created_at: Utc::now(),
+            }],
+            links: vec![ExportLink {
+                id: Uuid::from_u128(4),
+                a_tag_id: tag_id,
+                b_tag_id: Uuid::from_u128(5),
+                score: 88,
+                rationale: "same trip".to_owned(),
+                judged_at: Utc::now(),
+            }],
+            lists: vec![ExportList {
+                id: Uuid::from_u128(6),
+                name: "Saved 2024".to_owned(),
+                source: "import".to_owned(),
+                import_run_id: None,
+            }],
+            places: vec![ExportPlace {
+                id: Uuid::from_u128(8),
+                list_id: None,
+                tag_id: Some(tag_id),
+                name: "Nishiki Market".to_owned(),
+                address: Some("Kyoto".to_owned()),
+                lat: Some(35.005),
+                lng: Some(135.764),
+                place_id: None,
+                primary_type: Some("market".to_owned()),
+                types: vec!["market".to_owned()],
+                metro: None,
+                locality: Some("Kyoto".to_owned()),
+                country: Some("Japan".to_owned()),
+                notes: None,
+                source: "import".to_owned(),
+                enriched_at: None,
             }],
         }
     }
