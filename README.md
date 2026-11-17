@@ -86,6 +86,8 @@ first login.
 | `SESSION_TTL_DAYS` | no | `30` | Session lifetime, matching spec §6 |
 | `GOOGLE_AUTHORIZATION_ENDPOINT` / `GOOGLE_TOKEN_ENDPOINT` | no | Google's | Overrides, for a fake provider or a test double (endpoints are strings, so nothing here needs Google at build time) |
 | `STRANDS_TEST_REQUIRE_DB` | no | unset | Test-only. When `1`, an unreachable `DATABASE_URL` fails a test instead of skipping; the CI `schema` job sets it so a broken service container cannot pass as "skipped" |
+| `STRANDS_CONNECTOR_SECRET_KEY` | no | unset | 32 bytes, base64. Encrypts `connector_secrets` (the WhatsApp session row). Without it the WhatsApp endpoints answer "not configured" instead of half-working |
+| `STRANDS_WHATSAPP_PAIR_PHONE` | no | unset | E.164 number to offer pairing-by-code as well as by QR |
 
 ```sh
 export DATABASE_URL=postgres://strands:strands@localhost/strands
@@ -136,6 +138,38 @@ An edit adds a row; it never rewrites the generated one, so the history always
 shows what the model said and what a person changed it to. The card binds
 `A` (approve), `D` (discard) and `H` (history) while it is open, and ignores
 them whenever a text field has focus.
+
+### WhatsApp import
+
+Linking is opt-in and read-only: the server pairs a phone, reads the chats
+you allowlist, and imports their history as notes. It never sends anything.
+
+```
+GET  /api/v1/whatsapp            → { state, qr?, pair_code?, allowlist: [...], ... }
+POST /api/v1/whatsapp/pair       → starts (or reports) pairing; QR/pair code come back here
+PUT  /api/v1/whatsapp/allowlist  → { "jids": ["15551230000@s.whatsapp.net", ...] }
+POST /api/v1/whatsapp/import     → one pass over the inbox → { notes_created, chats_skipped, ... }
+POST /api/v1/whatsapp/sync       → "Sync now": same pass, for the button
+POST /api/v1/whatsapp/disconnect → logout on the phone, then forget the device
+```
+
+Three properties are enforced in code, not convention:
+
+- **Allowlisted only.** `bridge::select` partitions the buffer and drops every
+  chat that is not on the list before a transaction opens; non-allowlisted
+  messages are counted in `chats_skipped`, never stored.
+- **No send path.** The transport implements `WhatsAppSession`, which has no
+  send method, and nothing in `crates/server/src/whatsapp/` calls one. A reply
+  cannot be written by accident because there is no function to call.
+- **Dedupe per `(chat id, message id)`.** Each note gets
+  `dedupe_key = "whatsapp:{jid}:{message_id}"` under a unique
+  `(user_id, dedupe_key)` index, inserted `ON CONFLICT DO NOTHING`, so a
+  redelivery or a second "Sync now" inserts nothing twice.
+
+The session is **in memory**: a restart means re-scanning the QR. The durable
+backend (`whatsapp-rust-sqlite-storage`) pins `libsqlite3-sys ^0.37` while
+`sqlx` resolves 0.30, and cargo allows one package per `links = "sqlite3"` per
+workspace; both cannot be linked. `live.rs` documents this where it matters.
 
 The toolchain is pinned in `rust-toolchain.toml` (stable plus the
 `wasm32-unknown-unknown` target); `rustup` installs it on first use in this directory.
