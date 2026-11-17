@@ -11,6 +11,7 @@ use serde_json::json;
 
 use crate::auth::AuthError;
 use crate::llm::LlmError;
+use crate::whatsapp::bridge::WhatsAppError;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -25,6 +26,9 @@ pub enum AppError {
     /// the answer is `404` and not `403` (spec acceptance: "direct object
     /// access across users gets 404").
     NotFound,
+    /// A feature this build has no backend for: the WhatsApp link without
+    /// `STRANDS_SECRET_KEY` configured, say.
+    Unavailable(String),
     /// Our fault. Logged with its source, reported to the client as a bare 500.
     Internal {
         context: &'static str,
@@ -63,6 +67,26 @@ impl From<LlmError> for AppError {
     }
 }
 
+impl From<WhatsAppError> for AppError {
+    fn from(error: WhatsAppError) -> Self {
+        match error {
+            // No link, no client, or WhatsApp refusing the link: each is a
+            // condition the client or the operator can act on, so the answer
+            // says "not available", not "server bug".
+            WhatsAppError::NotLinked
+            | WhatsAppError::NotConfigured
+            | WhatsAppError::Rejected(_)
+            | WhatsAppError::Transport(_) => Self::Unavailable(error.to_string()),
+            // A stored session that no longer decrypts is our problem: the key
+            // rotated or the row was tampered with.
+            WhatsAppError::Session => Self::Internal {
+                context: "whatsapp session",
+                source: sqlx::Error::Protocol(error.to_string()),
+            },
+        }
+    }
+}
+
 impl From<AuthError> for AppError {
     fn from(error: AuthError) -> Self {
         match error {
@@ -91,6 +115,7 @@ impl IntoResponse for AppError {
             ),
             Self::BadRequest(message) => (StatusCode::BAD_REQUEST, message),
             Self::NotFound => (StatusCode::NOT_FOUND, "not found".to_owned()),
+            Self::Unavailable(message) => (StatusCode::SERVICE_UNAVAILABLE, message),
             Self::Internal { context, source } => {
                 eprintln!("strands: internal error during {context}: {source}");
                 (

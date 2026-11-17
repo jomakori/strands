@@ -20,3 +20,4 @@ pub mod search;
 pub mod secrets;
 pub mod summary;
 pub mod tagging;
+pub mod whatsapp;

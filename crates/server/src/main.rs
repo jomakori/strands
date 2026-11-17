@@ -17,6 +17,9 @@ use strands_server::llm::LiteLlmClient;
 use strands_server::secrets::SecretKey;
 use strands_server::summary::LiteLlmSummarizer;
 use strands_server::tagging::LiteLlmTagger;
+use strands_server::whatsapp::bridge::Registry as WhatsAppRegistry;
+use strands_server::whatsapp::live::LiveFactory;
+use strands_server::whatsapp::store::SessionCipher;
 
 #[tokio::main]
 async fn main() {
@@ -88,6 +91,24 @@ async fn main() {
             eprintln!(
                 "strands: STRANDS_SECRET_KEY is not set; stored connector tokens cannot be \
                  opened, so Google Photos picks will fail until it is"
+            );
+            state
+        }
+    };
+
+    // WhatsApp is optional in the same way, but for a different reason: the
+    // transport (whatsapp-rust) links a phone, so a deploy with no connector key
+    // must not offer a link that can never be turned on. Without the key the
+    // router keeps `UnconfiguredFactory`, and every endpoint says so plainly.
+    let state = match SessionCipher::from_env() {
+        Ok(cipher) => state.with_whatsapp(
+            Arc::new(WhatsAppRegistry::new(Arc::new(LiveFactory::from_env()))),
+            Arc::new(cipher),
+        ),
+        Err(_) => {
+            eprintln!(
+                "strands: STRANDS_SECRET_KEY is unset or not 32 base64 bytes; \
+                 the WhatsApp link stays unconfigured"
             );
             state
         }
