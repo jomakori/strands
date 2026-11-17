@@ -15,6 +15,8 @@ pub mod gmaps;
 pub mod ingest;
 pub mod links;
 pub mod llm;
+pub mod photos;
 pub mod search;
+pub mod secrets;
 pub mod summary;
 pub mod tagging;

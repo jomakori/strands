@@ -25,10 +25,13 @@ use crate::gmaps::routes as gmaps_routes;
 use crate::ingest::routes as ingest_routes;
 use crate::links::handlers::routes as link_routes;
 use crate::links::{Judge, UnconfiguredJudge};
+use crate::photos::routes as photos_routes;
 use crate::search::routes as search_routes;
+use crate::secrets::SecretKey;
 use crate::summary::Summarizer;
 use crate::summary::handlers::routes as summary_routes;
 use crate::tagging::{Tagger, UnconfiguredTagger};
+use strands_connector_photos::{PickerApi, UnconfiguredPicker};
 
 /// Everything a handler may reach.
 #[derive(Clone)]
@@ -57,6 +60,14 @@ pub struct AppState {
     /// the network (ticket T10). Defaults to a judge that fails loudly, so a
     /// deploy without one cannot look successful with an empty constellation.
     pub judge: Arc<dyn Judge>,
+    /// The Google Photos Picker API (ticket T14). `dyn` so tests script the
+    /// pick and never touch the network; an unconfigured deploy gets
+    /// [`UnconfiguredPicker`], which fails loudly instead of reporting a pick
+    /// that never happened.
+    pub photos: Arc<dyn PickerApi>,
+    /// The key that opens `connector_secrets`; `None` means no connector token
+    /// can be read, which the photos routes report as a misconfigured deploy.
+    pub secrets: Option<Arc<SecretKey>>,
 }
 
 impl AppState {
@@ -76,6 +87,8 @@ impl AppState {
             tagger: Arc::new(UnconfiguredTagger),
             geocoder: Arc::new(UnconfiguredResolver),
             judge: Arc::new(UnconfiguredJudge),
+            photos: Arc::new(UnconfiguredPicker),
+            secrets: None,
         }
     }
 
@@ -96,6 +109,20 @@ impl AppState {
         self.judge = judge;
         self
     }
+
+    /// Install the Google Photos Picker client (ticket T14). Production passes
+    /// [`crate::photos::PickerHandle`]; tests pass one that scripts the pick.
+    pub fn with_photos(mut self, photos: Arc<dyn PickerApi>) -> Self {
+        self.photos = photos;
+        self
+    }
+
+    /// Install the key that opens stored connector tokens. Without it the photos
+    /// routes report a misconfigured deploy instead of importing nothing.
+    pub fn with_secrets(mut self, key: Arc<SecretKey>) -> Self {
+        self.secrets = Some(key);
+        self
+    }
 }
 
 /// Liveness probe: always `{"status": "ok"}` once the process is up.
@@ -113,6 +140,7 @@ pub fn router(state: AppState) -> Router {
         .merge(gmaps_routes())
         .merge(ingest_routes())
         .merge(link_routes())
+        .merge(photos_routes())
         .merge(search_routes())
         .merge(summary_routes())
         // Unknown paths answer the same JSON error shape as every handler, so a
