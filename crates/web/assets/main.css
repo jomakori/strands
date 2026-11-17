@@ -255,6 +255,20 @@ button {
   display: grid;
   gap: 12px;
   grid-template-columns: minmax(0, 1fr);
+  /* The feed is a list of tags, so the markup is a list; the reset keeps the layout. */
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The anchor is the card, the item is only the track it sits in. */
+.grid-item {
+  display: flex;
+  min-width: 0;
+}
+
+.grid-item > .tag {
+  flex: 1;
 }
 
 @media (min-width: 700px) {
