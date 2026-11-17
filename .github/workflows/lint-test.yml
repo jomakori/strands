@@ -160,7 +160,9 @@ jobs:
       contents: read
     env:
       DIOXUS_CLI_VERSION: "0.7.10"
-      BUNDLE_SIZE_LIMIT_BYTES: "5242880"
+      # 2.5 MiB, measured on the gzip of the release wasm — the bytes a browser
+      # actually downloads. scripts/wasm-budget.sh is the gate.
+      WASM_GZIP_BUDGET_BYTES: "2621440"
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -179,7 +181,7 @@ jobs:
       - name: Build the release WASM bundle
         run: dx build --package strands-web --platform web --release
 
-      - name: Locate the bundle and report its size
+      - name: Stage the release wasm the browser downloads
         id: bundle
         run: |
           PUBLIC_DIR=$(find target/dx -type d -path '*/release/web/public' | head -n1)
@@ -187,20 +189,21 @@ jobs:
             echo "::error::could not locate the dx web bundle under target/dx"
             exit 1
           fi
-          BUNDLE_SIZE_BYTES=$(du -sb "${PUBLIC_DIR}" | cut -f1)
-          echo "Bundle directory: ${PUBLIC_DIR}"
-          echo "Bundle size: ${BUNDLE_SIZE_BYTES} bytes"
-          echo "bundle_dir=${PUBLIC_DIR}" >> "${GITHUB_OUTPUT}"
-          echo "bundle_size_bytes=${BUNDLE_SIZE_BYTES}" >> "${GITHUB_OUTPUT}"
-
-      - name: Enforce the bundle size budget
-        env:
-          BUNDLE_SIZE_IN_BYTES: ${{ steps.bundle.outputs.bundle_size_bytes }}
-        run: |
-          if [ "${BUNDLE_SIZE_IN_BYTES}" -gt "${BUNDLE_SIZE_LIMIT_BYTES}" ]; then
-            echo "::error::bundle is ${BUNDLE_SIZE_IN_BYTES} bytes, over the ${BUNDLE_SIZE_LIMIT_BYTES} byte budget"
+          # dx leaves the wasm of every earlier build beside the new one, so take
+          # the newest — that is the file index.html's module loads.
+          WASM=$(find "${PUBLIC_DIR}" -maxdepth 2 -name 'strands-web*.wasm' -type f -printf '%T@ %p\n' | sort -rn | head -n1 | cut -d' ' -f2-)
+          if [ -z "${WASM}" ]; then
+            echo "::error::the bundle at ${PUBLIC_DIR} carries no strands-web*.wasm"
             exit 1
           fi
+          mkdir -p artifacts
+          cp "${WASM}" artifacts/strands-web.wasm
+          echo "Bundle directory: ${PUBLIC_DIR}"
+          echo "Release wasm: ${WASM} ($(wc -c <"${WASM}" | tr -d ' ') bytes)"
+          echo "bundle_dir=${PUBLIC_DIR}" >>"${GITHUB_OUTPUT}"
+
+      - name: Enforce the wasm gzip budget
+        run: scripts/wasm-budget.sh artifacts
 
       - name: Upload the WASM bundle
         uses: actions/upload-artifact@v7
