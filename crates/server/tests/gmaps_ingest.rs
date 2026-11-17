@@ -78,6 +78,7 @@ impl PlaceResolver for FakeGeocoder {
                 types: vec!["cafe".to_owned(), "food".to_owned()],
                 metro: Some("San Francisco County".to_owned()),
                 locality: Some("San Francisco".to_owned()),
+                state: Some("California".to_owned()),
                 country: Some("United States".to_owned()),
             }))
         })

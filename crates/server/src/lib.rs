@@ -16,6 +16,7 @@ pub mod ingest;
 pub mod links;
 pub mod llm;
 pub mod photos;
+pub mod places;
 pub mod search;
 pub mod secrets;
 pub mod summary;

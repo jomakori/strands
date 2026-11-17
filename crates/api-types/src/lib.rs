@@ -14,6 +14,7 @@ mod ingest;
 mod link;
 mod me;
 mod photos;
+mod places;
 mod search;
 mod summary;
 mod tag;
@@ -31,6 +32,10 @@ pub use ingest::{IngestItem, IngestRequest, IngestResult};
 pub use link::{JudgeLinksResponse, LinkSummary};
 pub use me::Profile;
 pub use photos::{PhotoPickResult, PhotoPickState, PhotoSession};
+pub use places::{
+    AcceptedPlace, BackfillItem, BackfillPlace, BackfillRequest, BackfillResult, BackfillSource,
+    MAX_BACKFILL_ITEMS, MAX_NEARBY_CANDIDATES, NearbyCandidate, NearbyRequest, NearbyResult,
+};
 pub use search::SearchResult;
 pub use summary::{
     EditSummaryRequest, GenerateSummaryRequest, MAX_SUMMARY_BODY_CHARS, SummaryGuide,

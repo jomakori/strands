@@ -38,6 +38,7 @@ pub struct ResolvedPlace {
     pub types: Vec<String>,
     pub metro: Option<String>,
     pub locality: Option<String>,
+    pub state: Option<String>,
     pub country: Option<String>,
 }
 
@@ -51,11 +52,36 @@ pub enum PlaceError {
 
 /// Looks a place up. `Ok(None)` means "asked, found nothing" — distinct from an
 /// error, and both leave the row unresolved.
+///
+/// `reverse` and `nearby` default to "nothing", so the importers' existing
+/// fakes keep compiling; the production resolver overrides both. The
+/// unconfigured resolver overrides them to fail loudly instead, because a
+/// silent empty Nearby list or a cached "nothing here" is worse than a 503.
 pub trait PlaceResolver: Send + Sync {
     fn resolve<'a>(
         &'a self,
         query: PlaceQuery<'a>,
     ) -> BoxFuture<'a, Result<Option<ResolvedPlace>, PlaceError>>;
+
+    /// Reverse-geocode a coordinate (T21 backfill and geocode cache).
+    fn reverse<'a>(
+        &'a self,
+        _lat: f64,
+        _lng: f64,
+    ) -> BoxFuture<'a, Result<Option<ResolvedPlace>, PlaceError>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    /// Nearby Search (New), capped by the caller (T21 tap-only candidates).
+    fn nearby<'a>(
+        &'a self,
+        _lat: f64,
+        _lng: f64,
+        _radius_m: u32,
+        _max: usize,
+    ) -> BoxFuture<'a, Result<Vec<ResolvedPlace>, PlaceError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
 }
 
 /// The resolver used when no Places API key is configured.
@@ -69,6 +95,32 @@ impl PlaceResolver for UnconfiguredResolver {
     ) -> BoxFuture<'a, Result<Option<ResolvedPlace>, PlaceError>> {
         Box::pin(async { Ok(None) })
     }
+
+    fn reverse<'a>(
+        &'a self,
+        _lat: f64,
+        _lng: f64,
+    ) -> BoxFuture<'a, Result<Option<ResolvedPlace>, PlaceError>> {
+        Box::pin(async {
+            Err(PlaceError::Upstream(
+                "no Google Maps API key configured; cannot reverse-geocode".into(),
+            ))
+        })
+    }
+
+    fn nearby<'a>(
+        &'a self,
+        _lat: f64,
+        _lng: f64,
+        _radius_m: u32,
+        _max: usize,
+    ) -> BoxFuture<'a, Result<Vec<ResolvedPlace>, PlaceError>> {
+        Box::pin(async {
+            Err(PlaceError::Upstream(
+                "no Google Maps API key configured; Nearby Search is unavailable".into(),
+            ))
+        })
+    }
 }
 
 /// Google Places API (New) text search.
@@ -76,6 +128,8 @@ impl PlaceResolver for UnconfiguredResolver {
 pub struct PlacesApiResolver {
     client: reqwest::Client,
     endpoint: String,
+    reverse_endpoint: String,
+    nearby_endpoint: String,
     api_key: String,
 }
 
@@ -98,8 +152,19 @@ impl PlacesApiResolver {
         Self {
             client: reqwest::Client::new(),
             endpoint,
+            reverse_endpoint: std::env::var("GOOGLE_GEOCODE_ENDPOINT")
+                .unwrap_or_else(|_| "https://maps.googleapis.com/maps/api/geocode/json".into()),
+            nearby_endpoint: std::env::var("GOOGLE_PLACES_NEARBY_ENDPOINT")
+                .unwrap_or_else(|_| "https://places.googleapis.com/v1/places:searchNearby".into()),
             api_key,
         }
+    }
+
+    /// Override the reverse-geocode and Nearby endpoints (tests, proxies).
+    pub fn with_endpoints(mut self, reverse_endpoint: String, nearby_endpoint: String) -> Self {
+        self.reverse_endpoint = reverse_endpoint;
+        self.nearby_endpoint = nearby_endpoint;
+        self
     }
 }
 
@@ -190,6 +255,151 @@ impl PlaceResolver for PlacesApiResolver {
             Ok(parsed.places.into_iter().next().and_then(into_resolved))
         })
     }
+
+    fn reverse<'a>(
+        &'a self,
+        lat: f64,
+        lng: f64,
+    ) -> BoxFuture<'a, Result<Option<ResolvedPlace>, PlaceError>> {
+        Box::pin(async move {
+            if !lat.is_finite() || !lng.is_finite() {
+                return Ok(None);
+            }
+
+            // Geocoding API v3: `latlng` is a query parameter and the key is
+            // `key`, matching the documented reverse-geocoding request.
+            let url = self.reverse_endpoint.trim_end_matches('/');
+            let latlng = format!("{lat},{lng}");
+            let response = self
+                .client
+                .get(url)
+                .query(&[("latlng", latlng.as_str()), ("key", self.api_key.as_str())])
+                .send()
+                .await
+                .map_err(|err| PlaceError::Transport(err.to_string()))?;
+
+            let status = response.status();
+            if !status.is_success() {
+                let detail = response.text().await.unwrap_or_default();
+                return Err(PlaceError::Upstream(format!("{status}: {detail}")));
+            }
+
+            let parsed: GeocodeResponse = response
+                .json()
+                .await
+                .map_err(|err| PlaceError::Transport(err.to_string()))?;
+
+            match parsed.status.as_str() {
+                "OK" | "ZERO_RESULTS" => {
+                    Ok(parsed.results.into_iter().next().and_then(into_geocoded))
+                }
+                _ => Err(PlaceError::Upstream(parsed.status)),
+            }
+        })
+    }
+
+    fn nearby<'a>(
+        &'a self,
+        lat: f64,
+        lng: f64,
+        radius_m: u32,
+        max: usize,
+    ) -> BoxFuture<'a, Result<Vec<ResolvedPlace>, PlaceError>> {
+        Box::pin(async move {
+            if !lat.is_finite() || !lng.is_finite() {
+                return Ok(Vec::new());
+            }
+
+            // The provider allows 1..=20; the ticket's own cap (10) is applied
+            // by the handler so this request can never ask for more cards than
+            // the surface shows.
+            let wanted = max.clamp(1, 20);
+            let body = serde_json::json!({
+                "maxResultCount": wanted,
+                "rankPreference": "DISTANCE",
+                "locationRestriction": {
+                    "circle": {
+                        "center": {"latitude": lat, "longitude": lng},
+                        "radius": radius_m as f64,
+                    }
+                }
+            });
+
+            let response = self
+                .client
+                .post(&self.nearby_endpoint)
+                .header("X-Goog-Api-Key", &self.api_key)
+                .header(
+                    "X-Goog-FieldMask",
+                    "places.id,places.displayName,places.formattedAddress,places.location,\
+                     places.primaryType,places.types,places.addressComponents",
+                )
+                .json(&body)
+                .send()
+                .await
+                .map_err(|err| PlaceError::Transport(err.to_string()))?;
+
+            let status = response.status();
+            if !status.is_success() {
+                let detail = response.text().await.unwrap_or_default();
+                return Err(PlaceError::Upstream(format!("{status}: {detail}")));
+            }
+
+            let parsed: SearchResponse = response
+                .json()
+                .await
+                .map_err(|err| PlaceError::Transport(err.to_string()))?;
+
+            Ok(parsed
+                .places
+                .into_iter()
+                .filter_map(into_resolved)
+                .collect())
+        })
+    }
+}
+
+/// Reverse-geocode response (Geocoding API v3). `status` distinguishes "no
+/// address at this point" (`ZERO_RESULTS`) from a rejected request.
+#[derive(Deserialize)]
+struct GeocodeResponse {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    results: Vec<GeoPlace>,
+}
+
+#[derive(Deserialize)]
+struct GeoPlace {
+    #[serde(default)]
+    place_id: Option<String>,
+    #[serde(default)]
+    formatted_address: Option<String>,
+    #[serde(default)]
+    geometry: Option<GeoGeometry>,
+    #[serde(default)]
+    address_components: Vec<GeoComponent>,
+}
+
+#[derive(Deserialize)]
+struct GeoGeometry {
+    #[serde(default)]
+    location: Option<GeoLatLng>,
+}
+
+#[derive(Deserialize)]
+struct GeoLatLng {
+    lat: f64,
+    lng: f64,
+}
+
+/// v3 spells components `long_name`, unlike Places API (New)'s `longText`.
+#[derive(Deserialize)]
+struct GeoComponent {
+    #[serde(default)]
+    long_name: Option<String>,
+    #[serde(default)]
+    types: Vec<String>,
 }
 
 /// A result without coordinates is not a resolved place; dropping it here keeps
@@ -217,6 +427,35 @@ fn into_resolved(place: ApiPlace) -> Option<ResolvedPlace> {
         types: place.types,
         metro: component("administrative_area_level_2"),
         locality: component("locality"),
+        state: component("administrative_area_level_1"),
+        country: component("country"),
+    })
+}
+
+/// A reverse-geocode result carries no venue identity — only the administrative
+/// components the cache stores. The geo coordinate itself is supplied by the
+/// caller, so a result without one is still usable.
+fn into_geocoded(place: GeoPlace) -> Option<ResolvedPlace> {
+    let location = place.geometry.and_then(|geometry| geometry.location)?;
+    let component = |wanted: &str| {
+        place
+            .address_components
+            .iter()
+            .find(|component| component.types.iter().any(|kind| kind == wanted))
+            .and_then(|component| component.long_name.clone())
+    };
+
+    Some(ResolvedPlace {
+        name: String::new(),
+        address: place.formatted_address,
+        lat: location.lat,
+        lng: location.lng,
+        place_id: place.place_id,
+        primary_type: None,
+        types: Vec::new(),
+        metro: component("administrative_area_level_2"),
+        locality: component("locality"),
+        state: component("administrative_area_level_1"),
         country: component("country"),
     })
 }
@@ -244,15 +483,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_unconfigured_resolver_finds_nothing_and_does_not_invent() {
+    async fn the_unconfigured_resolver_fails_loudly_on_reverse_and_nearby() {
         let resolver = UnconfiguredResolver;
-        let resolved = resolver
-            .resolve(PlaceQuery {
-                name: "Blue Bottle",
-                address: "1 Ferry Building, San Francisco",
-            })
-            .await
-            .expect("no transport involved");
-        assert_eq!(resolved, None);
+        assert!(resolver.reverse(38.7223, -9.1393).await.is_err());
+        assert!(resolver.nearby(38.7223, -9.1393, 800, 10).await.is_err());
+    }
+
+    #[test]
+    fn a_reverse_result_takes_administrative_components_not_the_address_line() {
+        let raw = serde_json::json!({
+            "status": "OK",
+            "results": [{
+                "place_id": "ChIJfixture",
+                "formatted_address": "1 Nowhere Road, Faraway",
+                "geometry": { "location": { "lat": 38.7223, "lng": -9.1393 } },
+                "address_components": [
+                    { "long_name": "Lisbon", "types": ["locality", "political"] },
+                    { "long_name": "Lisbon District", "types": ["administrative_area_level_2"] },
+                    { "long_name": "Lisbon", "types": ["administrative_area_level_1"] },
+                    { "long_name": "Portugal", "types": ["country"] }
+                ]
+            }]
+        });
+        let parsed: GeocodeResponse = serde_json::from_value(raw).expect("fixture parses");
+        assert_eq!(parsed.status, "OK");
+        let place = parsed
+            .results
+            .into_iter()
+            .next()
+            .and_then(into_geocoded)
+            .expect("fixture resolves");
+        assert_eq!(place.locality.as_deref(), Some("Lisbon"));
+        assert_eq!(place.metro.as_deref(), Some("Lisbon District"));
+        assert_eq!(place.state.as_deref(), Some("Lisbon"));
+        assert_eq!(place.country.as_deref(), Some("Portugal"));
+        assert_eq!(place.lat, 38.7223);
     }
 }
