@@ -9,7 +9,7 @@ name = "strands-server"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 reqwest = { version = "0.12", default-features = false, features = [
@@ -35,5 +35,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
+# KML well-formedness is asserted by parsing it, not by matching strings.
+quick-xml = "0.37"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"

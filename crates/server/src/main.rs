@@ -10,6 +10,7 @@ use strands_server::app::{AppState, router};
 use strands_server::auth::identity::GoogleIdentityProvider;
 use strands_server::config::AuthConfig;
 use strands_server::db;
+use strands_server::gmaps::places::PlacesApiResolver;
 use strands_server::llm::LiteLlmClient;
 use strands_server::summary::LiteLlmSummarizer;
 use strands_server::tagging::LiteLlmTagger;
@@ -47,6 +48,20 @@ async fn main() {
         Arc::new(summarizer),
     )
     .with_tagger(Arc::new(tagger));
+
+    // Place enrichment is optional where auth and the LLM are not: without a
+    // key the import still works and marks every row unresolved, which is the
+    // honest outcome. Say so once at boot instead of failing health checks.
+    let state = match PlacesApiResolver::from_env() {
+        Some(resolver) => state.with_geocoder(Arc::new(resolver)),
+        None => {
+            eprintln!(
+                "strands: GOOGLE_MAPS_API_KEY is not set; imported places stay unresolved \
+                 (they are imported, counted and reported, just not geocoded)"
+            );
+            state
+        }
+    };
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
         .await
