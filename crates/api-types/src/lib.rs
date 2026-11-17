@@ -9,6 +9,7 @@
 mod account;
 mod category;
 mod connector;
+mod gmaps;
 mod ingest;
 mod me;
 mod search;
@@ -22,6 +23,7 @@ pub use account::{
 };
 pub use category::CategorySummary;
 pub use connector::{ConnectorStatus, ConnectorSummary};
+pub use gmaps::{GmapsFormat, GmapsIngestResult, PlaceEnrichment, PlaceListSummary, PlaceSummary};
 pub use ingest::{IngestItem, IngestRequest, IngestResult};
 pub use me::Profile;
 pub use search::SearchResult;

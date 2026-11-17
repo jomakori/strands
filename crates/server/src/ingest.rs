@@ -229,7 +229,7 @@ fn dedupe_key(item: &IngestItem) -> String {
     }
 }
 
-async fn load_tag_summaries(
+pub(crate) async fn load_tag_summaries(
     pool: &sqlx::PgPool,
     user_id: Uuid,
     tag_ids: &[Uuid],
@@ -266,16 +266,42 @@ async fn load_tag_summaries(
 }
 
 /// The caller's tags keyed by normalized name, plus the new-tag budget.
-struct TagIndex {
+pub(crate) struct TagIndex {
     by_key: HashMap<String, Uuid>,
     category_id: Uuid,
     created: usize,
 }
 
 impl TagIndex {
+    /// Build an index from the caller's existing tags.
+    ///
+    /// The text-ingest path fills this as it goes; importers that file notes
+    /// under a place-derived tag hint (ticket T16) need the same tag rows the
+    /// user already has, so they start from a load rather than an empty map.
+    pub(crate) async fn load(
+        conn: &mut Transaction<'_, Postgres>,
+        user_id: Uuid,
+        category_id: Uuid,
+    ) -> Result<Self, AppError> {
+        let rows: Vec<(Uuid, String)> =
+            sqlx::query_as("SELECT id, name FROM tags WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_all(&mut **conn)
+                .await?;
+        let by_key = rows
+            .into_iter()
+            .map(|(id, name)| (normalize_tag_name(&name), id))
+            .collect();
+        Ok(Self {
+            by_key,
+            category_id,
+            created: 0,
+        })
+    }
+
     /// The id for `raw`, creating the tag only when the name is genuinely new
     /// and the per-ingest budget allows it; otherwise file under Inbox.
-    async fn resolve(
+    pub(crate) async fn resolve(
         &mut self,
         conn: &mut Transaction<'_, Postgres>,
         user_id: Uuid,

@@ -20,6 +20,8 @@ use crate::auth::routes::routes as auth_routes;
 use crate::config::AuthConfig;
 use crate::connectors::routes as connector_routes;
 use crate::error::AppError;
+use crate::gmaps::places::{PlaceResolver, UnconfiguredResolver};
+use crate::gmaps::routes as gmaps_routes;
 use crate::ingest::routes as ingest_routes;
 use crate::search::routes as search_routes;
 use crate::summary::Summarizer;
@@ -44,6 +46,11 @@ pub struct AppState {
     /// installs a tagger that fails loudly, so an unconfigured deploy cannot
     /// silently skip tag assignment; production calls `with_tagger`.
     pub tagger: Arc<dyn Tagger>,
+    /// Google Places lookups for imported saved places (ticket T16). `dyn` so
+    /// tests use a fake and never touch the network; an unconfigured deploy gets
+    /// [`UnconfiguredResolver`], which resolves nothing and marks every row
+    /// unresolved rather than inventing coordinates.
+    pub geocoder: Arc<dyn PlaceResolver>,
 }
 
 impl AppState {
@@ -61,12 +68,19 @@ impl AppState {
             registry,
             summarizer,
             tagger: Arc::new(UnconfiguredTagger),
+            geocoder: Arc::new(UnconfiguredResolver),
         }
     }
 
     /// Install the production tagger (ticket T9).
     pub fn with_tagger(mut self, tagger: Arc<dyn Tagger>) -> Self {
         self.tagger = tagger;
+        self
+    }
+
+    /// Install the place lookup used by Google Maps imports (ticket T16).
+    pub fn with_geocoder(mut self, geocoder: Arc<dyn PlaceResolver>) -> Self {
+        self.geocoder = geocoder;
         self
     }
 }
@@ -83,6 +97,7 @@ pub fn router(state: AppState) -> Router {
         .merge(auth_routes())
         .merge(api::routes())
         .merge(connector_routes())
+        .merge(gmaps_routes())
         .merge(ingest_routes())
         .merge(search_routes())
         .merge(summary_routes())

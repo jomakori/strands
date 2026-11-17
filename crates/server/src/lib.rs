@@ -11,6 +11,7 @@ pub mod config;
 pub mod connectors;
 pub mod db;
 pub mod error;
+pub mod gmaps;
 pub mod ingest;
 pub mod llm;
 pub mod search;
