@@ -14,6 +14,11 @@ ARG DIOXUS_CLI_VERSION=0.7.10
 # ---- build -----------------------------------------------------------------
 FROM rust:${RUST_VERSION}-bookworm AS build
 
+# The base image's `/bin/sh` is dash, which has no `pipefail`; the heredoc step
+# below sets it because a silent `curl | tar` failure would otherwise leave a
+# half-written `dx` behind. Everything else in this stage is plain sh.
+SHELL ["/bin/bash", "-c"]
+
 # The web crate only compiles for the browser target.
 RUN rustup target add wasm32-unknown-unknown
 
