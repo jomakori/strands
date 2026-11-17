@@ -14,8 +14,9 @@ const CATEGORY = uuid(8);
 const TAGS = [
   { id: uuid(1), name: "Coffee", category_id: CATEGORY, thread_count: 4, created_at: "2026-11-01T09:00:00Z" },
   { id: uuid(2), name: "Lisbon", category_id: CATEGORY, thread_count: 3, created_at: "2026-11-02T09:00:00Z" },
+  { id: uuid(3), name: "Notebooks", category_id: CATEGORY, thread_count: 2, created_at: "2026-11-03T09:00:00Z" },
   // A tag the judge never paired with anything: it must still render, and say so.
-  { id: uuid(3), name: "Notebooks", category_id: CATEGORY, thread_count: 1, created_at: "2026-11-03T09:00:00Z" },
+  { id: uuid(6), name: "Sourdough", category_id: CATEGORY, thread_count: 1, created_at: "2026-11-04T09:00:00Z" },
 ];
 
 const LINKS = [
@@ -77,7 +78,7 @@ test.describe("constellation", () => {
     );
 
     // A tag with no judged edge is on the graph and admits it.
-    const lonely = page.locator('button[aria-label="Tag Notebooks"]');
+    const lonely = page.locator('button[aria-label="Tag Sourdough"]');
     await expect(lonely).toBeVisible();
     await expect(lonely.locator(".constellation-node-empty")).toHaveText(
       "nothing linked yet",
