@@ -88,6 +88,18 @@ pub fn Account() -> Element {
                                     role: "button",
                                     "Export my data"
                                 }
+                                p { class: "sub", id: "account-kml-hint",
+                                    "Saved Google Maps places download as KML: open it in Google Earth or \
+                                     My Maps. Places without coordinates are left out of the file."
+                                }
+                                a {
+                                    class: "button account-action",
+                                    id: "account-kml",
+                                    href: api::KML_PATH,
+                                    download: "strands-places.kml",
+                                    role: "button",
+                                    "Download places as KML"
+                                }
                             }
 
                             section { class: "account-section", "aria-labelledby": "account-delete-heading",

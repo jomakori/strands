@@ -180,6 +180,12 @@ pub async fn delete_my_data() -> Result<(), ApiError> {
 /// path that could disagree with `GET /api/v1/account/export`.
 pub const EXPORT_PATH: &str = "/api/v1/account/export";
 
+/// Where the KML download points. Same trick as [`EXPORT_PATH`]: an anchor with
+/// `download` keeps the session cookie and the server's own
+/// `application/vnd.google-earth.kml+xml` type, and leaves the unresolved count
+/// on the response header rather than inventing a second code path.
+pub const KML_PATH: &str = "/api/v1/places/kml";
+
 /// Shared GET-and-decode: every endpoint above is a plain GET with a JSON
 /// body, so the per-call code is just the path and the target type.
 async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {

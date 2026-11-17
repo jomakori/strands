@@ -137,6 +137,14 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test summary_generation
 
+      # Ticket T16: ingest, lists and the KML export are DB-gated. Without this
+      # step they would be skipped by the plain `cargo test` job above — which
+      # has no DATABASE_URL — and the acceptance criteria would never run.
+      - name: Run the Google Maps ingest acceptance test
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --test gmaps_ingest
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest
