@@ -385,7 +385,7 @@ async fn import_without_allowlist_writes_nothing() {
 }
 
 #[tokio::test]
-async fn import_without_a_session_is_rejected() {
+async fn import_without_a_paired_session_is_rejected() {
     let Some(harness) = Harness::connect().await else {
         return;
     };
@@ -405,4 +405,76 @@ async fn import_without_a_session_is_rejected() {
         .expect("router response")
         .status();
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn whatsapp_endpoints_require_a_session() {
+    let Some(harness) = Harness::connect().await else {
+        return;
+    };
+
+    // No cookie at all: the extractor answers before any handler runs, on every
+    // endpoint, because there is nothing a caller could name to reach another
+    // account (no user id or connector id appears in any path).
+    for (method, uri) in [
+        ("GET", "/api/v1/whatsapp"),
+        ("POST", "/api/v1/whatsapp/pair"),
+        ("PUT", "/api/v1/whatsapp/allowlist"),
+        ("POST", "/api/v1/whatsapp/import"),
+        ("POST", "/api/v1/whatsapp/sync"),
+        ("POST", "/api/v1/whatsapp/disconnect"),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .expect("build request");
+        let status = harness
+            .app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response")
+            .status();
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{method} {uri} must reject an anonymous caller"
+        );
+    }
+}
+
+#[tokio::test]
+async fn allowlist_and_import_are_scoped_to_the_caller() {
+    let Some(harness) = Harness::connect().await else {
+        return;
+    };
+    let first = harness.user().await;
+    let second = harness.user().await;
+
+    // Both accounts are paired and both see the same chat; only the first
+    // allowlists it. If any part of the path leaked the account, the second
+    // import would pick up the first account's allowlist.
+    let first_session = harness.open_session(&first).await;
+    let second_session = harness.open_session(&second).await;
+    first_session.push(vec![message(ALLOWED, "S1", "only for the first", 5)]);
+    second_session.push(vec![message(ALLOWED, "S2", "only for the second", 6)]);
+    assert_eq!(
+        harness.set_allowlist(&first, &[ALLOWED]).await,
+        StatusCode::OK
+    );
+
+    let (status, report) = harness.import(&second).await;
+    assert_eq!(status, StatusCode::OK, "import failed: {report:?}");
+    assert_eq!(
+        report.notes_created, 0,
+        "second account allowlisted nothing"
+    );
+    assert_eq!(note_count(&harness.pool, second.id).await, 0);
+
+    let (status, report) = harness.import(&first).await;
+    assert_eq!(status, StatusCode::OK, "import failed: {report:?}");
+    assert_eq!(report.notes_created, 1);
+    assert_eq!(note_count(&harness.pool, first.id).await, 1);
 }
