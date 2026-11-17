@@ -275,6 +275,22 @@ jobs:
           echo "::error::the bundle never answered on ${STRANDS_BASE_URL}"
           exit 1
 
+      # Accessibility is part of the render claim: the score comes from axe plus the computed
+      # contrast and keyboard passes in tests/a11y.spec.ts, at both viewports. The threshold
+      # and the measurements live in that spec; this step only reports and gates on them.
+      - name: Enforce accessibility >= 95 on both views
+        working-directory: e2e
+        run: |
+          run_status=0
+          npx playwright test tests/a11y.spec.ts --reporter=line || run_status=$?
+          summary_status=0
+          node scripts/a11y-summary.mjs || summary_status=$?
+          if [ "${run_status}" -ne 0 ]; then
+            echo "::error::accessibility is below the threshold; the job summary lists every failing check"
+            exit "${run_status}"
+          fi
+          exit "${summary_status}"
+
       - name: Run the browser specs at 360px and 1440px
         working-directory: e2e
         run: npx playwright test
@@ -287,6 +303,7 @@ jobs:
           path: |
             e2e/captures
             e2e/test-results
+            e2e/a11y
           if-no-files-found: warn
 
       - name: Record the render result in the job summary

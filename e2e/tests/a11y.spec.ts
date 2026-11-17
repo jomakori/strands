@@ -50,6 +50,7 @@ type KeyboardReport = {
 type Measurement = {
   project: string;
   view: "grid" | "tag-card";
+  threshold: number;
   score: number;
   violations: number;
   nodes: number;
@@ -161,6 +162,7 @@ async function measure(page: Page, view: Measurement["view"], project: string): 
   return {
     project,
     view,
+    threshold: THRESHOLD,
     score: Math.round(score * 10) / 10,
     violations: axe.violations.length,
     nodes: axe.violations.reduce((sum, rule) => sum + rule.nodes.length, 0),
