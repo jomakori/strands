@@ -23,11 +23,19 @@ pub struct PendingOAuth {
 
 /// Create the user on first login, refresh the profile on later ones.
 ///
-/// Keyed on `google_sub`, never on email: the email is mutable profile data and
+/// Keyed on `google_sub` (which since T20c holds the *issuer's* `sub` — Dex's,
+/// not Google's), never on email: the email is mutable profile data and
 /// reassigning it must not silently hand one account's data to another person.
+/// The column keeps its historical name because renaming it would rewrite the
+/// schema and every test insert for no behavioural gain.
 ///
 /// `users.email` is `UNIQUE`, so a provider that reuses an email across two
 /// subjects makes this fail loudly (500) instead of merging two people.
+///
+/// `users.provider` is left at its migration-0007 default (`google`): it records
+/// which upstream vouched for the address, and putting a broker in front of that
+/// upstream does not change the answer. Rewriting it would touch every existing
+/// row and the account-export format for a label.
 pub async fn upsert_user(pool: &PgPool, identity: &Identity) -> Result<UserId, sqlx::Error> {
     sqlx::query_scalar(
         "INSERT INTO users (id, google_sub, email, name, avatar_url) \

@@ -108,12 +108,10 @@ impl Summarizer for UnusedSummarizer {
 fn test_config() -> AuthConfig {
     AuthConfig {
         client_id: "test-client".into(),
-        client_secret: "test-secret".into(),
+        issuer: "https://accounts.example".into(),
         public_base_url: "https://strands.test".into(),
         cookie_secure: true,
         session_ttl_days: 30,
-        authorization_endpoint: "https://accounts.example/consent".into(),
-        token_endpoint: "https://accounts.example/token".into(),
     }
 }
 

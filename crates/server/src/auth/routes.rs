@@ -37,10 +37,13 @@ pub fn routes() -> Router<AppState> {
 /// hand the browser to the provider.
 ///
 /// The verifier never leaves the server — not in the URL, not in a cookie —
-/// which is the whole point of storing it in `oauth_requests`.
+/// which is the whole point of storing it in `oauth_requests`. The nonce is
+/// minted on the same draw and travels to the issuer; see the `identity` module
+/// note for why nothing compares it.
 pub async fn start(State(state): State<AppState>) -> Result<Response, AppError> {
     let state_token = random_token();
     let code_verifier = random_token();
+    let nonce = random_token();
     let code_challenge = pkce_challenge(&code_verifier);
     let redirect_uri = state.auth.redirect_uri();
 
@@ -55,6 +58,7 @@ pub async fn start(State(state): State<AppState>) -> Result<Response, AppError> 
 
     let consent_url = state.identity.consent_url(&ConsentRequest {
         state: &state_token,
+        nonce: &nonce,
         code_challenge: &code_challenge,
         redirect_uri: &redirect_uri,
     });

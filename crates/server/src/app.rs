@@ -249,12 +249,10 @@ mod tests {
             PgPool::connect_lazy("postgres://strands@localhost/strands").unwrap(),
             AuthConfig {
                 client_id: "client-id".into(),
-                client_secret: "client-secret".into(),
+                issuer: "https://accounts.example".into(),
                 public_base_url: "http://localhost:8080".into(),
                 cookie_secure: false,
                 session_ttl_days: 30,
-                authorization_endpoint: "https://accounts.example/consent".into(),
-                token_endpoint: "https://accounts.example/token".into(),
             },
             Arc::new(NeverCalled),
             Arc::new(strands_core::Registry::new()),

@@ -90,10 +90,10 @@ impl From<WhatsAppError> for AppError {
 impl From<AuthError> for AppError {
     fn from(error: AuthError) -> Self {
         match error {
-            // A rejected code or an id_token that fails validation is the
-            // client's problem (bad or replayed request), not ours.
+            // A rejected code, a userinfo answer we cannot trust, or a replayed
+            // callback is the client's problem, not ours.
             AuthError::InvalidCode
-            | AuthError::InvalidToken(_)
+            | AuthError::InvalidIdentity(_)
             | AuthError::UnknownState
             | AuthError::Denied(_) => Self::BadRequest(error.to_string()),
             // The provider is unreachable or misbehaving: our 500, and the

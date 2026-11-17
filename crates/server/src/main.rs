@@ -8,7 +8,7 @@ use strands_connector_photos::GooglePicker;
 use strands_core::Registry;
 use strands_core::connector::{FailingConnector, PlaceholderConnector, StubConnector};
 use strands_server::app::{AppState, router};
-use strands_server::auth::identity::GoogleIdentityProvider;
+use strands_server::auth::identity::OidcIdentityProvider;
 use strands_server::config::AuthConfig;
 use strands_server::db;
 use strands_server::gmaps::places::PlacesApiResolver;
@@ -29,13 +29,22 @@ async fn main() {
         .await
         .expect("connect to Postgres and apply migrations");
 
-    // Fail at boot, not on the first login: a missing client id/secret is a
-    // deployment mistake, and the process should never appear healthy without
-    // the credentials its only auth flow needs.
-    let auth = AuthConfig::from_env()
-        .expect("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set (see README)");
-    let identity =
-        GoogleIdentityProvider::from_config(&auth).expect("build the Google identity provider");
+    // Fail at boot, not on the first login: config errors and an unreachable
+    // issuer are deployment mistakes, and the process should never appear
+    // healthy without the settings its only auth flow needs. There is no client
+    // secret to require — the app is a public Dex client (see README).
+    let auth =
+        AuthConfig::from_env().expect("OIDC_ISSUER and OIDC_CLIENT_ID must be set (see README)");
+    let identity = OidcIdentityProvider::discover(&auth)
+        .await
+        .unwrap_or_else(|error| panic!("discover OIDC endpoints: {error}"));
+    eprintln!(
+        "strands: OIDC issuer {} → authorize {}, token {}, userinfo {}",
+        auth.issuer,
+        identity.endpoints().authorization,
+        identity.endpoints().token,
+        identity.endpoints().userinfo,
+    );
 
     let registry = build_registry();
 

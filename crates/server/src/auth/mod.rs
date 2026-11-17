@@ -32,9 +32,10 @@ pub enum AuthError {
     /// endpoint answered non-2xx.
     #[error("the authorization code was rejected by the identity provider")]
     InvalidCode,
-    /// The id_token is missing, undecodable, or its claims do not hold.
-    #[error("invalid id_token: {0}")]
-    InvalidToken(String),
+    /// The `/userinfo` answer is missing `sub`/`email`, or says the address is
+    /// unverified — an identity we cannot build a `users` row from.
+    #[error("invalid identity from userinfo: {0}")]
+    InvalidIdentity(String),
     /// `state` was unknown, already used, or expired (single use, 10 min TTL).
     #[error("unknown or expired authorization state")]
     UnknownState,

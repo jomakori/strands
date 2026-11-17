@@ -56,9 +56,12 @@ impl FakeIdentityProvider {
 
 impl IdentityProvider for FakeIdentityProvider {
     fn consent_url(&self, request: &ConsentRequest<'_>) -> String {
+        // Echoes what the handler handed over, so `login` can assert the flow
+        // carries state, nonce and PKCE. The real provider's exact URL shape is
+        // covered by the unit tests in `src/auth/identity.rs`.
         format!(
-            "https://accounts.example/consent?state={}&code_challenge={}&redirect_uri={}",
-            request.state, request.code_challenge, request.redirect_uri
+            "https://accounts.example/consent?state={}&nonce={}&code_challenge={}&redirect_uri={}",
+            request.state, request.nonce, request.code_challenge, request.redirect_uri
         )
     }
 
@@ -118,12 +121,10 @@ impl Harness {
 
         let config = AuthConfig {
             client_id: "test-client".into(),
-            client_secret: "test-secret".into(),
+            issuer: "https://accounts.example".into(),
             public_base_url: "https://strands.test".into(),
             cookie_secure: true,
             session_ttl_days: 30,
-            authorization_endpoint: "https://accounts.example/consent".into(),
-            token_endpoint: "https://accounts.example/token".into(),
         };
 
         let run = Uuid::new_v4().simple().to_string();
@@ -178,6 +179,14 @@ impl Harness {
         assert!(
             query_param(&location, "code_challenge").is_some(),
             "consent URL carries a PKCE challenge"
+        );
+        assert!(
+            query_param(&location, "nonce").is_some(),
+            "consent URL carries a nonce"
+        );
+        assert!(
+            !location.contains("client_secret"),
+            "a public client has no secret to send: {location}"
         );
 
         let (status, headers, _) = self
@@ -311,9 +320,8 @@ fn query_param(url: &str, name: &str) -> Option<String> {
 
 /// Acceptance rule 1: two Google accounts, two isolated datasets.
 #[tokio::test]
-async fn two_google_accounts_get_two_isolated_datasets() {
-    let Some(harness) = Harness::connect("two_google_accounts_get_two_isolated_datasets").await
-    else {
+async fn two_accounts_get_two_isolated_datasets() {
+    let Some(harness) = Harness::connect("two_accounts_get_two_isolated_datasets").await else {
         return;
     };
 
@@ -504,6 +512,35 @@ async fn replayed_or_unknown_state_does_not_create_a_session() {
         .get("/auth/google/callback?code=alice&state=guessed-state", None)
         .await;
     assert_eq!(unknown.0, StatusCode::BAD_REQUEST);
+
+    // A state minted by a *different* flow does not carry this one's verifier:
+    // two logins in flight must not be interchangeable.
+    let (_, headers, _) = harness.get("/auth/google", None).await;
+    let other_location = headers.get(header::LOCATION).unwrap().to_str().unwrap();
+    let other_state = query_param(other_location, "state").unwrap();
+    assert_ne!(other_state, state, "each flow mints its own state");
+    let crossed = harness
+        .get(
+            &format!("/auth/google/callback?code=alice&state={other_state}"),
+            None,
+        )
+        .await;
+    assert_eq!(
+        crossed.0,
+        StatusCode::SEE_OTHER,
+        "the second flow's own state still works once"
+    );
+    let reused = harness
+        .get(
+            &format!("/auth/google/callback?code=alice&state={state}"),
+            None,
+        )
+        .await;
+    assert_eq!(
+        reused.0,
+        StatusCode::BAD_REQUEST,
+        "the first flow's state is spent, not reusable by a later callback"
+    );
 
     let missing = harness.get("/auth/google/callback?code=alice", None).await;
     assert_eq!(missing.0, StatusCode::BAD_REQUEST);
