@@ -192,7 +192,10 @@ async fn checked(response: Response) -> Result<Response, PhotosError> {
         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => Err(PhotosError::Refused(
             "the access token was rejected".to_owned(),
         )),
-        StatusCode::NOT_FOUND => Err(PhotosError::Refused("the session is unknown".to_owned())),
+        // A session Google no longer knows is the same situation as a lapsed
+        // download URL: the handle is dead and only a new session issues live
+        // ones. Distinguishing it by status keeps callers from string-matching.
+        StatusCode::NOT_FOUND => Err(PhotosError::Expired),
         status => Err(refused(status, "calling the picker api")),
     }
 }

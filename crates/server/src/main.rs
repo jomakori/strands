@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 
+use strands_connector_photos::GooglePicker;
 use strands_core::Registry;
 use strands_core::connector::{FailingConnector, PlaceholderConnector, StubConnector};
 use strands_server::app::{AppState, router};
@@ -13,6 +14,7 @@ use strands_server::db;
 use strands_server::gmaps::places::PlacesApiResolver;
 use strands_server::links::LiteLlmJudge;
 use strands_server::llm::LiteLlmClient;
+use strands_server::secrets::SecretKey;
 use strands_server::summary::LiteLlmSummarizer;
 use strands_server::tagging::LiteLlmTagger;
 
@@ -62,6 +64,30 @@ async fn main() {
             eprintln!(
                 "strands: GOOGLE_MAPS_API_KEY is not set; imported places stay unresolved \
                  (they are imported, counted and reported, just not geocoded)"
+            );
+            state
+        }
+    };
+
+    // The picker is the only photos path: there is no library listing, so the
+    // client must be real here. It needs no credential of its own — the user's
+    // stored token is passed per request.
+    let state = state.with_photos(Arc::new(
+        GooglePicker::new().expect("build the Google Photos Picker client"),
+    ));
+
+    // Without the sealing key, stored connector tokens cannot be opened, so a
+    // pick could never start. Say so at boot rather than at the first tap.
+    let state = match SecretKey::from_env() {
+        Some(Ok(key)) => state.with_secrets(Arc::new(key)),
+        Some(Err(error)) => {
+            eprintln!("strands: STRANDS_SECRET_KEY is unusable ({error}); Google Photos is off");
+            state
+        }
+        None => {
+            eprintln!(
+                "strands: STRANDS_SECRET_KEY is not set; stored connector tokens cannot be \
+                 opened, so Google Photos picks will fail until it is"
             );
             state
         }

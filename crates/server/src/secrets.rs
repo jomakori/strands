@@ -107,10 +107,12 @@ pub async fn access_token(
     let Some(blob) = ciphertext else {
         return Ok(None);
     };
-    key.open(&blob).map(Some).map_err(|error| AppError::Internal {
-        context: "connector secret",
-        source: sqlx::Error::Protocol(error.to_string()),
-    })
+    key.open(&blob)
+        .map(Some)
+        .map_err(|error| AppError::Internal {
+            context: "connector secret",
+            source: sqlx::Error::Protocol(error.to_string()),
+        })
 }
 
 #[cfg(test)]
