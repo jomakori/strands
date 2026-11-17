@@ -277,8 +277,8 @@ jobs:
             e2e/test-results
           if-no-files-found: warn
 
-      - name: Post the render result on the pull request
-        if: always() && github.event_name == 'pull_request'
+      - name: Record the render result in the job summary
+        if: always()
         uses: actions/github-script@v8
         with:
           script: |
@@ -319,8 +319,4 @@ jobs:
               "",
               "Captures: artifact `strands-ui-captures` on this run.",
             ];
-            await github.rest.issues.createComment({
-              ...context.repo,
-              issue_number: context.issue.number,
-              body: lines.join("\n"),
-            });
+            await core.summary.addRaw(lines.join("\n")).write();
