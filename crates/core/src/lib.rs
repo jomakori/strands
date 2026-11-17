@@ -5,6 +5,7 @@ mod db;
 mod error;
 mod ids;
 mod note;
+mod poi;
 mod source;
 mod tag;
 mod timestamp;
@@ -19,6 +20,7 @@ pub use ids::{
     SummaryId, TagId, ThreadId, UserId,
 };
 pub use note::{MAX_BODY_CHARS, Note};
+pub use poi::{METRO_TAG_PREFIX, PoiTag, metro_tag};
 pub use source::Source;
 pub use tag::Tag;
 pub use timestamp::Timestamp;
