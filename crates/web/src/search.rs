@@ -61,7 +61,7 @@ pub fn SearchSheet() -> Element {
     };
     let typed = !query().trim().is_empty();
 
-    use_focus_trap(open(), "search-sheet");
+    use_focus_trap(open, "search-sheet");
 
     rsx! {
         if open() {

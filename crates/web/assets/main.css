@@ -20,6 +20,7 @@
   --border-strong: color-mix(in oklch, var(--fg) 28%, transparent);
   --accent: oklch(0.86 0.14 95);
   --on-accent: oklch(0.18 0.02 265);
+  --danger: oklch(0.8 0.135 25);
 
   --travel: oklch(0.82 0.12 190);
   --tech: oklch(0.76 0.14 255);
@@ -146,6 +147,10 @@ button {
   gap: 5px;
   min-width: 0;
   padding: 2px 10px 0 0;
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
 }
 
 .brand-word b {
@@ -681,7 +686,7 @@ button {
 
 .capture-error {
   margin: 12px 0 0;
-  color: oklch(0.78 0.14 25);
+  color: var(--danger);
   font-size: 13px;
 }
 
@@ -1072,6 +1077,7 @@ button {
     border: 1px solid var(--border);
     border-radius: var(--radius);
   }
+}
 
 .summary-versions {
   margin: 0;
@@ -1464,4 +1470,134 @@ button {
     font-size: 13px;
     max-width: 132px;
   }
+}
+
+/* ---------- load states ----------
+ *
+ * One shape per state, shared by every fetch-backed surface: the skeleton that
+ * holds a list's space, the notice that names a failure and hands back the
+ * request, and the empty note that explains why there is nothing to show.
+ * Contrast stays inside the token palette — the notice's text is --fg on --bg.
+ */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skeleton {
+  display: grid;
+  gap: 10px;
+  padding: 14px 0 4px;
+}
+
+.skeleton-line {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--fg) 10%, transparent);
+  animation: skeleton-sheen 1.5s var(--ease) infinite;
+}
+
+.skeleton-line:nth-of-type(2n) {
+  width: 68%;
+}
+
+.skeleton-line:nth-of-type(3n) {
+  width: 44%;
+}
+
+@keyframes skeleton-sheen {
+  50% {
+    background: color-mix(in oklch, var(--fg) 16%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-line {
+    animation: none;
+  }
+}
+
+.load-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 16px;
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in oklch, var(--fg) 18%, transparent);
+  border-radius: 14px;
+  background: color-mix(in oklch, var(--fg) 5%, transparent);
+}
+
+.load-error-text {
+  flex: 1 1 200px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--fg);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--fg) 7%, transparent);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color 140ms var(--ease), background 140ms var(--ease);
+}
+
+.button:hover {
+  border-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+
+.retry-button {
+  flex: 0 0 auto;
+}
+
+.empty-notice {
+  margin: 16px 0 0;
+  padding: 18px 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 16px;
+  text-align: center;
+}
+
+.empty-title {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  color: var(--fg);
+}
+
+.empty-notice .sub {
+  margin: 0;
+}
+
+/* the capture form's own failure: the sent note rolled back, so the retry is
+ * the same submit again — keep it beside the message, not below the fold. */
+.capture-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+
+.capture-error .load-error-text {
+  color: var(--danger);
 }

@@ -17,7 +17,7 @@ pub fn ShortcutMap() -> Element {
 
     // Focus lands inside the sheet on open, Tab cycles within it, and closing returns
     // focus to whatever key or control opened the map.
-    use_focus_trap((shortcuts.help_open)(), "shortcut-map");
+    use_focus_trap(shortcuts.help_open, "shortcut-map");
 
     if !(shortcuts.help_open)() {
         return rsx! {};

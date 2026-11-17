@@ -169,8 +169,11 @@ fn PathEntry(tag: Tag, thread: ThreadPreview) -> Element {
     let segments = data::thread_path(&tag, &thread);
 
     rsx! {
+        // `role="listitem"` because the stack is a `role="list"`: a list whose children
+        // are bare `div`s announces nothing, so each entry names itself as one item.
         div {
             class: "path-entry",
+            role: "listitem",
             "data-path-entry": "true",
             "data-thread-id": "{thread.id}",
             div { class: "path-head",
@@ -292,16 +295,21 @@ fn SummaryCard(tag_id: String) -> Element {
     let mut freeform = use_signal(String::new);
     let mut busy = use_signal(|| false);
     let mut notice = use_signal(|| None::<String>);
+    // The request a failed notice came from, kept so the notice can offer the same call
+    // again rather than only describing it.
+    let mut retry = use_signal(|| None::<RetryOp>);
     let mut history_open = use_signal(|| true);
     let mut editing = use_signal(|| None::<Uuid>);
     let mut draft = use_signal(String::new);
     let shortcuts = use_context::<Shortcuts>();
 
-    // Load the history whenever the card mounts or a retry bumps the attempt.
+    // Load the history whenever the card mounts or a retry bumps the attempt. A
+    // resource, not a future: a future spawns once, so the attempt bump would never
+    // re-issue the call and the retry button would be decoration.
     let mut history_attempt = use_signal(|| 0_u32);
     let mut history_error = use_signal(|| None::<String>);
     let mut history_loading = use_signal(|| tag_uuid.is_some());
-    use_future(move || async move {
+    let _history = use_resource(move || async move {
         let Some(id) = tag_uuid else {
             return;
         };
@@ -362,12 +370,13 @@ fn SummaryCard(tag_id: String) -> Element {
         })
         .collect();
 
-    let mut run = move |force: bool| {
+    let run = Callback::new(move |force: bool| {
         if busy() {
             return;
         }
         let Some(id) = tag_uuid else {
             notice.set(Some("Summaries need a saved tag.".to_owned()));
+            retry.set(None);
             return;
         };
         let guide = selected().to_guide(&freeform.read());
@@ -375,11 +384,13 @@ fn SummaryCard(tag_id: String) -> Element {
             notice.set(Some(
                 "Write an instruction for the freeform guide first.".to_owned(),
             ));
+            retry.set(None);
             return;
         }
 
         busy.set(true);
         notice.set(None);
+        retry.set(None);
         spawn(async move {
             let request = GenerateSummaryRequest { guide, force };
             match api::generate_summary(id, &request).await {
@@ -396,28 +407,36 @@ fn SummaryCard(tag_id: String) -> Element {
                         list.insert(0, version);
                         drop(list);
                         notice.set(Some(format!("Version list may be stale: {error}")));
+                        retry.set(Some(RetryOp::Generate { force }));
                     }
                 },
-                Err(error) => notice.set(Some(format!("Summary failed: {error}"))),
+                Err(error) => {
+                    notice.set(Some(format!("Summary failed: {error}")));
+                    retry.set(Some(RetryOp::Generate { force }));
+                }
             }
             busy.set(false);
         });
-    };
+    });
 
     // One transition, one request: the server answers with the card's whole review
     // state, so nothing has to be spliced locally.
-    let mut review = move |action: ReviewAction| {
+    let review = Callback::new(move |action: ReviewAction| {
         if busy() {
             return;
         }
         let Some(id) = tag_uuid else {
             notice.set(Some("Summaries need a saved tag.".to_owned()));
+            retry.set(None);
             return;
         };
         busy.set(true);
         notice.set(None);
-        spawn(apply_review(id, action, versions, approved, busy, notice));
-    };
+        retry.set(None);
+        spawn(apply_review(
+            id, action, versions, approved, busy, notice, retry,
+        ));
+    });
 
     let mut start_edit = move |id: Uuid| {
         editing.set(Some(id));
@@ -427,7 +446,7 @@ fn SummaryCard(tag_id: String) -> Element {
         editing.set(None);
         draft.set(String::new());
     };
-    let mut save_edit = move || {
+    let save_edit = Callback::new(move |_: ()| {
         let (Some(id), Some(version_id)) = (tag_uuid, editing()) else {
             return;
         };
@@ -437,11 +456,13 @@ fn SummaryCard(tag_id: String) -> Element {
         let body = draft();
         if body.trim().is_empty() {
             notice.set(Some("The summary cannot be empty.".to_owned()));
+            retry.set(None);
             return;
         }
 
         busy.set(true);
         notice.set(None);
+        retry.set(None);
         spawn(async move {
             match api::edit_summary(id, version_id, &body).await {
                 Ok(history) => {
@@ -450,11 +471,14 @@ fn SummaryCard(tag_id: String) -> Element {
                     editing.set(None);
                     draft.set(String::new());
                 }
-                Err(error) => notice.set(Some(format!("Edit failed: {error}"))),
+                Err(error) => {
+                    notice.set(Some(format!("Edit failed: {error}")));
+                    retry.set(Some(RetryOp::Edit));
+                }
             }
             busy.set(false);
         });
-    };
+    });
 
     // A / D / H are the card's own bindings: the map resolves them and the shell parks
     // the action here, so the card installs no listener of its own.
@@ -469,12 +493,12 @@ fn SummaryCard(tag_id: String) -> Element {
             Action::ToggleHistory => history_open.toggle(),
             Action::ApproveSummary => {
                 if let Some(id) = pending_of(&versions.read(), approved()) {
-                    review(ReviewAction::Approve(id));
+                    review.call(ReviewAction::Approve(id));
                 }
             }
             Action::DiscardSummary => {
                 if let Some(id) = pending_of(&versions.read(), approved()) {
-                    review(ReviewAction::Discard(id));
+                    review.call(ReviewAction::Discard(id));
                 }
             }
             _ => {}
@@ -520,7 +544,7 @@ fn SummaryCard(tag_id: String) -> Element {
                                 id: "summary-edit-save",
                                 r#type: "button",
                                 disabled: busy(),
-                                onclick: move |_| save_edit(),
+                                onclick: move |_| save_edit.call(()),
                                 "Save as new version"
                             }
                             button {
@@ -542,7 +566,7 @@ fn SummaryCard(tag_id: String) -> Element {
                                 title: "Approve (A)",
                                 onclick: move |_| {
                                     if let Some(id) = pending_id {
-                                        review(ReviewAction::Approve(id));
+                                        review.call(ReviewAction::Approve(id));
                                     }
                                 },
                                 "Approve"
@@ -555,7 +579,7 @@ fn SummaryCard(tag_id: String) -> Element {
                                 title: "Discard (D)",
                                 onclick: move |_| {
                                     if let Some(id) = pending_id {
-                                        review(ReviewAction::Discard(id));
+                                        review.call(ReviewAction::Discard(id));
                                     }
                                 },
                                 "Discard"
@@ -604,7 +628,7 @@ fn SummaryCard(tag_id: String) -> Element {
                     id: "summary-generate",
                     r#type: "button",
                     disabled: busy(),
-                    onclick: move |_| run(false),
+                    onclick: move |_| run.call(false),
                     if busy() { "Working…" } else { "Generate" }
                 }
                 button {
@@ -612,12 +636,23 @@ fn SummaryCard(tag_id: String) -> Element {
                     id: "summary-regenerate",
                     r#type: "button",
                     disabled: busy(),
-                    onclick: move |_| run(true),
+                    onclick: move |_| run.call(true),
                     "Regenerate"
                 }
             }
             if let Some(message) = notice() {
-                p { class: "sub summary-notice", "{message}" }
+                if let Some(op) = retry() {
+                    RetryNotice {
+                        message,
+                        onretry: move |_| match op {
+                            RetryOp::Generate { force } => run.call(force),
+                            RetryOp::Review(action) => review.call(action),
+                            RetryOp::Edit => save_edit.call(()),
+                        },
+                    }
+                } else {
+                    p { class: "sub summary-notice", role: "alert", "{message}" }
+                }
             }
             if let Some(message) = history_error() {
                 RetryNotice {
@@ -677,6 +712,14 @@ enum ReviewAction {
     Discard(Uuid),
 }
 
+/// The request behind a failed notice, so its retry re-issues exactly that call.
+#[derive(Clone, Copy)]
+enum RetryOp {
+    Generate { force: bool },
+    Review(ReviewAction),
+    Edit,
+}
+
 /// Run one transition and fold the server's answer back into the card.
 async fn apply_review(
     tag_id: Uuid,
@@ -685,6 +728,7 @@ async fn apply_review(
     mut approved: Signal<Option<Uuid>>,
     mut busy: Signal<bool>,
     mut notice: Signal<Option<String>>,
+    mut retry: Signal<Option<RetryOp>>,
 ) {
     let result = match action {
         ReviewAction::Approve(id) => api::approve_summary(tag_id, id).await,
@@ -696,7 +740,10 @@ async fn apply_review(
             versions.set(history.versions);
             approved.set(history.approved_version_id);
         }
-        Err(error) => notice.set(Some(format!("Review action failed: {error}"))),
+        Err(error) => {
+            notice.set(Some(format!("Review action failed: {error}")));
+            retry.set(Some(RetryOp::Review(action)));
+        }
     }
     busy.set(false);
 }

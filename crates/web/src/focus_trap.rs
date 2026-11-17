@@ -27,12 +27,17 @@ struct Trap {
 }
 
 /// Contain focus inside `container_id` while `active` is true.
-pub fn use_focus_trap(active: bool, container_id: &'static str) {
+///
+/// The flag is a signal, not a bool: the effect has to read it *inside* the closure,
+/// otherwise the closure captures one value at mount and never re-runs when the
+/// overlay opens — the trap installs never and the overlay opens unfocused.
+pub fn use_focus_trap(active: Signal<bool>, container_id: &'static str) {
     let slot = use_hook(|| Rc::new(RefCell::new(None::<Trap>)));
 
     use_effect(move || {
+        let open = *active.read();
         let mut held = slot.borrow_mut();
-        match (active, held.is_some()) {
+        match (open, held.is_some()) {
             (true, false) => *held = install(container_id),
             (false, true) => release(held.as_mut()),
             _ => {}
