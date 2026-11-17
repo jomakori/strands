@@ -3453,6 +3453,7 @@ dependencies = [
  "http-body-util",
  "quick-xml",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "sha2",

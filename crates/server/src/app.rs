@@ -32,6 +32,9 @@ use crate::summary::Summarizer;
 use crate::summary::handlers::routes as summary_routes;
 use crate::tagging::{Tagger, UnconfiguredTagger};
 use strands_connector_photos::{PickerApi, UnconfiguredPicker};
+use crate::whatsapp::bridge::{Registry as WhatsAppRegistry, UnconfiguredFactory};
+use crate::whatsapp::routes as whatsapp_routes;
+use crate::whatsapp::store::SessionCipher;
 
 /// Everything a handler may reach.
 #[derive(Clone)]
@@ -68,6 +71,12 @@ pub struct AppState {
     /// The key that opens `connector_secrets`; `None` means no connector token
     /// can be read, which the photos routes report as a misconfigured deploy.
     pub secrets: Option<Arc<SecretKey>>,
+    /// Open WhatsApp sessions (ticket T15). Defaults to a registry whose factory
+    /// refuses to open anything, so an unconfigured deploy answers 503 rather
+    /// than acting as if a phone were paired.
+    pub whatsapp: Arc<WhatsAppRegistry>,
+    /// Key for `connector_secrets`; `None` until `with_whatsapp` installs one.
+    pub whatsapp_cipher: Option<Arc<SessionCipher>>,
 }
 
 impl AppState {
@@ -89,6 +98,8 @@ impl AppState {
             judge: Arc::new(UnconfiguredJudge),
             photos: Arc::new(UnconfiguredPicker),
             secrets: None,
+            whatsapp: Arc::new(WhatsAppRegistry::new(Arc::new(UnconfiguredFactory))),
+            whatsapp_cipher: None,
         }
     }
 
@@ -121,6 +132,14 @@ impl AppState {
     /// routes report a misconfigured deploy instead of importing nothing.
     pub fn with_secrets(mut self, key: Arc<SecretKey>) -> Self {
         self.secrets = Some(key);
+    /// Install the WhatsApp session registry and secret key (ticket T15).
+    pub fn with_whatsapp(
+        mut self,
+        registry: Arc<WhatsAppRegistry>,
+        cipher: Arc<SessionCipher>,
+    ) -> Self {
+        self.whatsapp = registry;
+        self.whatsapp_cipher = Some(cipher);
         self
     }
 }
@@ -143,6 +162,7 @@ pub fn router(state: AppState) -> Router {
         .merge(photos_routes())
         .merge(search_routes())
         .merge(summary_routes())
+        .merge(whatsapp_routes())
         // Unknown paths answer the same JSON error shape as every handler, so a
         // client parsing `{"error": …}` never meets an HTML body instead.
         .fallback(not_found)

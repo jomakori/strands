@@ -18,6 +18,7 @@ mod search;
 mod summary;
 mod tag;
 mod thread;
+mod whatsapp;
 
 pub use account::{
     AccountExport, EXPORT_FORMAT_VERSION, ExportLink, ExportList, ExportNote, ExportPlace,
@@ -37,3 +38,7 @@ pub use summary::{
 };
 pub use tag::{NewTag, TagDetail, TagSummary};
 pub use thread::{NewThread, ThreadDetail, ThreadSummary};
+pub use whatsapp::{
+    WHATSAPP_DISCLOSURE, WhatsAppAllowlist, WhatsAppChat, WhatsAppImportReport, WhatsAppLinkState,
+    WhatsAppStatus,
+};
