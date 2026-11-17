@@ -203,7 +203,17 @@ jobs:
           echo "bundle_dir=${PUBLIC_DIR}" >>"${GITHUB_OUTPUT}"
 
       - name: Enforce the wasm gzip budget
-        run: scripts/wasm-budget.sh artifacts
+        # The table is the record of what we measured, so prove it reached the job
+        # summary instead of assuming the write path works. The budget verdict
+        # keeps its own exit code: over budget still fails, summary or not.
+        run: |
+          status=0
+          scripts/wasm-budget.sh artifacts || status=$?
+          grep -q 'WASM gzip budget' "${GITHUB_STEP_SUMMARY}" || {
+            echo "::error::the budget table never reached \$GITHUB_STEP_SUMMARY"
+            exit 1
+          }
+          exit "${status}"
 
       - name: Upload the WASM bundle
         uses: actions/upload-artifact@v7
