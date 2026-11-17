@@ -23,6 +23,8 @@ use crate::error::AppError;
 use crate::gmaps::places::{PlaceResolver, UnconfiguredResolver};
 use crate::gmaps::routes as gmaps_routes;
 use crate::ingest::routes as ingest_routes;
+use crate::links::handlers::routes as link_routes;
+use crate::links::{Judge, UnconfiguredJudge};
 use crate::search::routes as search_routes;
 use crate::summary::Summarizer;
 use crate::summary::handlers::routes as summary_routes;
@@ -51,6 +53,10 @@ pub struct AppState {
     /// [`UnconfiguredResolver`], which resolves nothing and marks every row
     /// unresolved rather than inventing coordinates.
     pub geocoder: Arc<dyn PlaceResolver>,
+    /// `dyn` so production can use LiteLLM and tests a fake that never hits
+    /// the network (ticket T10). Defaults to a judge that fails loudly, so a
+    /// deploy without one cannot look successful with an empty constellation.
+    pub judge: Arc<dyn Judge>,
 }
 
 impl AppState {
@@ -69,6 +75,7 @@ impl AppState {
             summarizer,
             tagger: Arc::new(UnconfiguredTagger),
             geocoder: Arc::new(UnconfiguredResolver),
+            judge: Arc::new(UnconfiguredJudge),
         }
     }
 
@@ -81,6 +88,12 @@ impl AppState {
     /// Install the place lookup used by Google Maps imports (ticket T16).
     pub fn with_geocoder(mut self, geocoder: Arc<dyn PlaceResolver>) -> Self {
         self.geocoder = geocoder;
+        self
+    }
+
+    /// Install the production link judge (ticket T10).
+    pub fn with_judge(mut self, judge: Arc<dyn Judge>) -> Self {
+        self.judge = judge;
         self
     }
 }
@@ -99,6 +112,7 @@ pub fn router(state: AppState) -> Router {
         .merge(connector_routes())
         .merge(gmaps_routes())
         .merge(ingest_routes())
+        .merge(link_routes())
         .merge(search_routes())
         .merge(summary_routes())
         // Unknown paths answer the same JSON error shape as every handler, so a

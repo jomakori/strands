@@ -11,6 +11,7 @@ use strands_server::auth::identity::GoogleIdentityProvider;
 use strands_server::config::AuthConfig;
 use strands_server::db;
 use strands_server::gmaps::places::PlacesApiResolver;
+use strands_server::links::LiteLlmJudge;
 use strands_server::llm::LiteLlmClient;
 use strands_server::summary::LiteLlmSummarizer;
 use strands_server::tagging::LiteLlmTagger;
@@ -34,11 +35,13 @@ async fn main() {
 
     // Same fail-at-boot rule as the identity provider: a missing LiteLLM
     // config should never pass health checks and fail only on first use.
-    // One client, one connection pool: summaries (T7) and tagging (T9) share it.
+    // One client, one connection pool: summaries (T7), tagging (T9) and link
+    // judging (T10) share it.
     let llm =
         LiteLlmClient::from_env().expect("LITELLM_BASE_URL and LITELLM_MASTER_KEY must be set");
     let summarizer = LiteLlmSummarizer::new(llm.clone());
-    let tagger = LiteLlmTagger::new(llm);
+    let tagger = LiteLlmTagger::new(llm.clone());
+    let judge = LiteLlmJudge::new(llm);
 
     let state = AppState::new(
         pool,
@@ -47,7 +50,8 @@ async fn main() {
         Arc::new(registry),
         Arc::new(summarizer),
     )
-    .with_tagger(Arc::new(tagger));
+    .with_tagger(Arc::new(tagger))
+    .with_judge(Arc::new(judge));
 
     // Place enrichment is optional where auth and the LLM are not: without a
     // key the import still works and marks every row unresolved, which is the

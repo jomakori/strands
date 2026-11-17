@@ -10,6 +10,7 @@ use strands_keymap::Action;
 
 use crate::account::Account;
 use crate::capture::Capture;
+use crate::constellation::Constellation;
 use crate::detail::TagDetail;
 use crate::help::ShortcutMap;
 use crate::home::HomeView;
@@ -30,6 +31,9 @@ pub enum Route {
 
     #[route("/capture")]
     Capture {},
+
+    #[route("/constellation")]
+    Constellation {},
 
     #[route("/settings")]
     Settings {},

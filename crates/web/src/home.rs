@@ -98,6 +98,9 @@ pub fn HomeView() -> Element {
                         }
                     }
                     footer { class: "feed-foot",
+                        Link { class: "back-link", id: "constellation-link", to: Route::Constellation {},
+                            "Constellation"
+                        }
                         Link { class: "back-link", id: "account-link", to: Route::Account {},
                             "Account"
                         }

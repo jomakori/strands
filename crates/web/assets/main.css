@@ -1304,3 +1304,164 @@ button {
 .account-warning {
   color: #f0776d;
 }
+
+/* ---------------------------------------------------------------------------
+   Constellation (T10) — tags as nodes, judged links as edges.
+
+   The plot is a square that fits the column at 360px: node positions are
+   percentages, so nothing can push the page sideways. Node labels clamp to the
+   node width with ellipsis, and the rationale panel sits below rather than
+   floating, so a small screen never needs a horizontal scroll.
+--------------------------------------------------------------------------- */
+
+.constellation {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 14px 40px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.constellation-head h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 26px;
+  letter-spacing: -0.02em;
+}
+
+.constellation-plot {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 68vh;
+  margin: 0 auto;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.constellation-edges {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  stroke: var(--accent);
+  pointer-events: none;
+}
+
+.constellation-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 104px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: border-color 160ms var(--ease), background 160ms var(--ease);
+}
+
+.constellation-node:hover,
+.constellation-node:focus-visible {
+  border-color: var(--accent);
+}
+
+.constellation-node.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 16%, var(--surface-2));
+}
+
+.constellation-node-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.constellation-node-empty {
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.constellation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.constellation-rationale {
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+  min-height: 72px;
+}
+
+.constellation-rationale h2 {
+  margin: 0 0 8px;
+  font-family: var(--font-display);
+  font-size: 18px;
+}
+
+.constellation-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.constellation-links li {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 10px 12px;
+}
+
+.constellation-link-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.constellation-link-score {
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--accent);
+  min-width: 2ch;
+}
+
+.constellation-link-pair {
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 640px) {
+  .constellation {
+    padding: 28px 24px 56px;
+  }
+
+  .constellation-head h1 {
+    font-size: 34px;
+  }
+
+  .constellation-node {
+    font-size: 13px;
+    max-width: 132px;
+  }
+}

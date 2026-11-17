@@ -13,6 +13,7 @@ pub mod db;
 pub mod error;
 pub mod gmaps;
 pub mod ingest;
+pub mod links;
 pub mod llm;
 pub mod search;
 pub mod summary;
