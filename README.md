@@ -60,7 +60,8 @@ is held, so typing never fires a chord.
 
 ```sh
 cargo run -p strands-server
-curl http://localhost:8080/healthz   # => {"status":"ok"}
+curl http://localhost:8080/healthz
+# => {"commit":"<short sha>","status":"ok","version":"0.1.0"}
 ```
 
 The SPA needs the dioxus CLI:
@@ -68,7 +69,38 @@ The SPA needs the dioxus CLI:
 ```sh
 cargo install dioxus-cli --version 0.7.10 --locked
 dx build --package strands-web --platform web --release
+
+# Point the server at what `dx` just wrote; `dist` below is what the image
+# uses, so a plain `cargo run` serves the API only.
+STRANDS_ASSETS_DIR=$(find target/dx -type d -path '*/release/web/public' | head -n1) \
+  cargo run -p strands-server
 ```
+
+### The image
+
+The deployable is one image: the same process answers `/api` and serves the
+bundle, so there is no second web tier and no way for the two to disagree about
+the release.
+
+```sh
+docker build -t strands .
+docker run --rm -p 8080:8080 \
+  -e DATABASE_URL=postgres://strands:***@host/strands \
+  -e GOOGLE_CLIENT_ID=... -e GOOGLE_CLIENT_SECRET=... \
+  -e PUBLIC_BASE_URL=http://localhost:8080 -e SESSION_COOKIE_SECURE=false \
+  strands
+```
+
+`.github/workflows/publish-image.yml` publishes to `ghcr.io/jomakori/strands`
+for `linux/amd64` and `linux/arm64` on a `v*` tag (or by hand), tagging
+`1.2.3`, `sha-<short>`, and `latest` — `latest` only on a tag, never on a bare
+commit. Images run as uid `10001`, listen on `8080`, and carry the bundle at
+`/app/dist`.
+
+Migrations are **embedded** (`sqlx::migrate!("../../migrations")` in
+`crates/server/src/db.rs`), so the schema travels inside the binary and the
+runtime image ships no `migrations/` directory: adding a migration needs a new
+image, not a new volume.
 
 ## Configuration
 
@@ -84,6 +116,7 @@ first login.
 | `PUBLIC_BASE_URL` | no | `http://localhost:8080` | Public origin, no trailing slash. The redirect URI is `${PUBLIC_BASE_URL}/auth/google/callback` and must be registered byte for byte in the Google console |
 | `SESSION_COOKIE_SECURE` | no | `true` | `Secure` on the session cookie. Set `false` only for a local plain-HTTP run |
 | `SESSION_TTL_DAYS` | no | `30` | Session lifetime, matching spec §6 |
+| `STRANDS_ASSETS_DIR` | no | `dist` | The `dx` bundle to serve at the site root. Unset with no `dist/` is a plain API-only dev run; **set** and missing fails at boot, because that is a broken image rather than a missing dev build |
 | `GOOGLE_AUTHORIZATION_ENDPOINT` / `GOOGLE_TOKEN_ENDPOINT` | no | Google's | Overrides, for a fake provider or a test double (endpoints are strings, so nothing here needs Google at build time) |
 | `STRANDS_TEST_REQUIRE_DB` | no | unset | Test-only. When `1`, an unreachable `DATABASE_URL` fails a test instead of skipping; the CI `schema` job sets it so a broken service container cannot pass as "skipped" |
 | `STRANDS_CONNECTOR_SECRET_KEY` | no | unset | 32 bytes, base64. Encrypts `connector_secrets` (the WhatsApp session row). Without it the WhatsApp endpoints answer "not configured" instead of half-working |

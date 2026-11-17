@@ -15,6 +15,7 @@ use strands_server::gmaps::places::PlacesApiResolver;
 use strands_server::links::LiteLlmJudge;
 use strands_server::llm::LiteLlmClient;
 use strands_server::secrets::SecretKey;
+use strands_server::static_files::Assets;
 use strands_server::summary::LiteLlmSummarizer;
 use strands_server::tagging::LiteLlmTagger;
 use strands_server::whatsapp::bridge::Registry as WhatsAppRegistry;
@@ -112,6 +113,29 @@ async fn main() {
             );
             state
         }
+    };
+
+    // The browser is served by this process (spec §6, one deployable): the
+    // wasm bundle at the site root, the API under `/api`. A dev run without a
+    // bundle still answers the API, which is worth having on its own.
+    let state = match Assets::resolve() {
+        Ok(Some(assets)) => {
+            eprintln!(
+                "strands: serving the web bundle from {}",
+                assets.dir().display()
+            );
+            state.with_assets(Some(assets))
+        }
+        Ok(None) => {
+            eprintln!(
+                "strands: no web bundle found (STRANDS_ASSETS_DIR unset and ./dist missing); \
+                 serving the API only"
+            );
+            state
+        }
+        // An explicitly configured bundle path that is not there is a
+        // packaging mistake — say so at boot instead of 404ing the site.
+        Err(error) => panic!("serve the web bundle: {error}"),
     };
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
