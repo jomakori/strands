@@ -530,6 +530,7 @@ fn SummaryCard(tag_id: String) -> Element {
                         span { class: "summary-badge", "{head.badge}" }
                     }
                     if editing_pending {
+                        label { class: "sr-only", r#for: "summary-edit", "Summary text" }
                         textarea {
                             class: "summary-edit",
                             id: "summary-edit",
@@ -613,6 +614,7 @@ fn SummaryCard(tag_id: String) -> Element {
                 }
             }
             if selected() == GuideChoice::Freeform {
+                label { class: "sr-only", r#for: "summary-instruction", "Summary focus" }
                 input {
                     class: "summary-input",
                     id: "summary-instruction",

@@ -92,9 +92,11 @@ pub fn HomeView() -> Element {
                             "{tags_label} · {threads_label}"
                         }
                     }
-                    div { class: "grid", id: "grid",
+                    ul { class: "grid", id: "grid",
                         for tag in shown.iter() {
-                            TagCard { key: "{tag.id}", tag: tag.clone() }
+                            li { class: "grid-item", key: "{tag.id}",
+                                TagCard { tag: tag.clone() }
+                            }
                         }
                     }
                     footer { class: "feed-foot",
