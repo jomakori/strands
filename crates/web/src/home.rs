@@ -61,7 +61,7 @@ pub fn HomeView() -> Element {
                             circle { cx: "26", cy: "5.6", r: "2.8", fill: "oklch(0.86 0.14 95)" }
                         }
                     }
-                    span { class: "brand-word",
+                    h1 { class: "brand-word",
                         b { "Strands" }
                         span { class: "strand", "aria-hidden": "true",
                             svg { view_box: "0 0 100 6", preserve_aspect_ratio: "none",

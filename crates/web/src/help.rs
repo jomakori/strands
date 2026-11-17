@@ -7,20 +7,17 @@
 use dioxus::prelude::*;
 use strands_keymap::{BINDINGS, Section};
 
-use crate::keys::{self, Shortcuts};
+use crate::focus_trap::use_focus_trap;
+use crate::keys::Shortcuts;
 
 /// The shortcut map; renders nothing at all while closed.
 #[component]
 pub fn ShortcutMap() -> Element {
     let mut shortcuts = use_context::<Shortcuts>();
 
-    // Opening the map lands focus on its close button, so Tab starts inside the sheet and
-    // walks the list; nothing traps the focus, so Tab on past the end leaves normally.
-    use_effect(move || {
-        if (shortcuts.help_open)() {
-            keys::focus("#shortcut-close");
-        }
-    });
+    // Focus lands inside the sheet on open, Tab cycles within it, and closing returns
+    // focus to whatever key or control opened the map.
+    use_focus_trap(shortcuts.help_open, "shortcut-map");
 
     if !(shortcuts.help_open)() {
         return rsx! {};
@@ -33,6 +30,7 @@ pub fn ShortcutMap() -> Element {
             role: "dialog",
             "aria-modal": "true",
             "aria-label": "Keyboard shortcuts",
+            tabindex: "-1",
             div { class: "sheet__panel help__panel",
                 div { class: "help__head",
                     h2 { class: "sheet__heading", "Keyboard" }

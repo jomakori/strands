@@ -17,6 +17,7 @@ use crate::api;
 use crate::data::{self, Category};
 use crate::home::{CatGlyph, Grid};
 use crate::routes::Route;
+use crate::state::RetryNotice;
 
 /// Body limit, mirroring `strands_core::note::MAX_BODY_CHARS`. The server is still the
 /// authority — it re-checks and refuses 5001 — this only keeps the textarea from accepting
@@ -40,20 +41,44 @@ pub fn Capture() -> Element {
     let mut known_tags = use_signal(Vec::<TagSummary>::new);
     let mut saving = use_signal(|| false);
     let mut error = use_signal(|| None::<String>);
+    let mut picker_attempt = use_signal(|| 0_u32);
+    let mut picker_error = use_signal(|| None::<String>);
 
     // Capture exists to take writing, so the caret starts in the body: the keyboard path
     // into this screen ends with a field already focused, and Tab walks on from there.
     use_effect(|| crate::keys::focus("#capture-body"));
 
-    // The caller's tags and categories, once, on mount. A failure is not fatal: the grid's
-    // own tags still drive the type-ahead and a new tag simply cannot be filed yet.
-    use_future(move || async move {
-        if let Ok(rows) = api::list_tags().await {
-            known_tags.set(rows);
+    // The caller's tags and categories, on mount and on every retry. A failure is not
+    // fatal — the grid's own tags still drive the type-ahead — but it is not silent
+    // either: without the server's categories a new tag cannot be filed at all, so the
+    // screen says so and offers the request again.
+    // A resource rather than a future: bumping `picker_attempt` has to re-run the
+    // fetch, and a future only ever runs once.
+    let _picker = use_resource(move || async move {
+        let _ = picker_attempt();
+        picker_error.set(None);
+        let mut failure = None;
+        match api::list_tags().await {
+            Ok(rows) => known_tags.set(rows),
+            Err(error) => {
+                failure = Some(format!(
+                    "Could not load your tags ({}). The grid's tags still match below.",
+                    crate::state::describe(&error)
+                ));
+            }
         }
-        if let Ok(rows) = api::list_categories().await {
-            categories.set(rows);
+        match api::list_categories().await {
+            Ok(rows) => categories.set(rows),
+            Err(error) => {
+                failure = failure.or_else(|| {
+                    Some(format!(
+                        "Could not load categories ({}). Filing a new tag is unavailable.",
+                        crate::state::describe(&error)
+                    ))
+                });
+            }
         }
+        picker_error.set(failure);
     });
 
     let typed = tag_field();
@@ -72,7 +97,7 @@ pub fn Capture() -> Element {
     let chars = body().chars().count();
     let ready = chars > 0 && !typed.trim().is_empty() && !saving();
 
-    let mut submit = move |_| {
+    let submit = Callback::new(move |_: ()| {
         let text = body().trim().to_owned();
         let tag_name = tag_field().trim().to_owned();
         if text.is_empty() || tag_name.is_empty() || saving() {
@@ -124,7 +149,7 @@ pub fn Capture() -> Element {
                 }
             }
         });
-    };
+    });
 
     rsx! {
         div { class: "app capture",
@@ -138,7 +163,7 @@ pub fn Capture() -> Element {
                 id: "capture-form",
                 onsubmit: move |event| {
                     event.prevent_default();
-                    submit(());
+                    submit.call(());
                 },
                 main { class: "feed", "aria-label": "Quick capture",
                     div { class: "feed-inner",
@@ -193,6 +218,12 @@ pub fn Capture() -> Element {
                                 }
                             }
                         }
+                        if let Some(message) = picker_error() {
+                            RetryNotice {
+                                message,
+                                onretry: move |_| picker_attempt += 1,
+                            }
+                        }
                         if creating {
                             div { class: "typeahead", id: "capture-create",
                                 p { class: "capture-create-hint", "data-testid": "capture-create",
@@ -214,8 +245,16 @@ pub fn Capture() -> Element {
                             }
                         }
                         if let Some(message) = error() {
-                            p { class: "capture-error", id: "capture-error", role: "alert",
-                                "{message}"
+                            div { class: "capture-error", id: "capture-error", role: "alert",
+                                p { class: "load-error-text", "{message}" }
+                                button {
+                                    class: "button retry-button",
+                                    id: "capture-retry",
+                                    r#type: "button",
+                                    "data-retry": "true",
+                                    onclick: move |_| submit.call(()),
+                                    "Try again"
+                                }
                             }
                         }
                     }

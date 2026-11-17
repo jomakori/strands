@@ -13,8 +13,10 @@ use dioxus::prelude::*;
 use strands_api_types::SearchResult;
 
 use crate::api;
+use crate::focus_trap::use_focus_trap;
 use crate::keys::{self, Shortcuts};
 use crate::routes::Route;
+use crate::state::{self, RetryNotice, Skeleton};
 
 /// The sheet itself; renders nothing at all while closed.
 #[component]
@@ -35,22 +37,31 @@ pub fn SearchSheet() -> Element {
 
     // Re-runs whenever the sheet opens or a query is submitted; an empty query asks the
     // endpoint for recents, so both states are one code path.
+    let mut attempt = use_signal(|| 0_u32);
     let results = use_resource(move || {
         let open = open();
         let query = submitted();
+        let _ = attempt();
         async move {
             if !open {
-                return Vec::new();
+                return Ok(Vec::new());
             }
-            api::search(query.as_deref().unwrap_or_default())
-                .await
-                .unwrap_or_default()
+            api::search(query.as_deref().unwrap_or_default()).await
         }
     });
 
-    let rows = results().unwrap_or_default();
-    let loading = results().is_none();
+    let loading = results.read().is_none();
+    let failure = match &*results.read() {
+        Some(Err(error)) => Some(state::describe(error)),
+        _ => None,
+    };
+    let rows = match &*results.read() {
+        Some(Ok(rows)) => rows.clone(),
+        _ => Vec::new(),
+    };
     let typed = !query().trim().is_empty();
+
+    use_focus_trap(open, "search-sheet");
 
     rsx! {
         if open() {
@@ -60,6 +71,7 @@ pub fn SearchSheet() -> Element {
                 role: "dialog",
                 "aria-modal": "true",
                 "aria-label": "Search",
+                tabindex: "-1",
                 onclick: move |_| open.set(false),
                 div {
                     class: "sheet__panel",
@@ -76,6 +88,7 @@ pub fn SearchSheet() -> Element {
                             class: "sheet__input",
                             r#type: "search",
                             placeholder: "Search threads and notes",
+                            "aria-label": "Search threads and notes",
                             autocomplete: "off",
                             value: "{query}",
                             oninput: move |event| {
@@ -95,8 +108,13 @@ pub fn SearchSheet() -> Element {
                         } else {
                             h2 { class: "sheet__heading", "Recent" }
                         }
-                        if loading {
-                            p { class: "sheet__empty", "Searching…" }
+                        if let Some(message) = failure {
+                            RetryNotice {
+                                message: format!("Search failed: {message}"),
+                                onretry: move |_| attempt += 1,
+                            }
+                        } else if loading {
+                            Skeleton { lines: 3, label: "Searching…" }
                         } else if rows.is_empty() && typed {
                             p { class: "sheet__empty", "Nothing matches “{query}”." }
                         } else if rows.is_empty() {

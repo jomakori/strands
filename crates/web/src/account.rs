@@ -12,14 +12,20 @@
 
 use dioxus::prelude::*;
 
-use crate::api::{self, ApiError};
+use crate::api;
 use crate::home::Grid;
 use crate::routes::Route;
+use crate::state::{self, RetryNotice, Skeleton};
 
 /// The whole account screen: identity, export, then the destructive action.
 #[component]
 pub fn Account() -> Element {
-    let profile = use_resource(api::me);
+    // Bumping `attempt` is what a retry does: the resource re-runs when it changes.
+    let mut attempt = use_signal(|| 0_u32);
+    let profile = use_resource(move || async move {
+        let _ = attempt();
+        api::me().await
+    });
     // Whether the confirm step is showing. Nothing is deleted until this is true
     // *and* the second press lands.
     let mut confirming = use_signal(|| false);
@@ -42,7 +48,7 @@ pub fn Account() -> Element {
                     deleted.set(true);
                 }
                 Err(error) => {
-                    failure.set(Some(format_error(&error)));
+                    failure.set(Some(state::describe(&error)));
                     confirming.set(false);
                 }
             }
@@ -61,9 +67,12 @@ pub fn Account() -> Element {
                 div { class: "feed-inner",
                     h1 { class: "name", id: "account-title", "Account" }
                     match &*profile.read() {
-                        None => rsx! { p { class: "sub", "Loading your account…" } },
+                        None => rsx! { Skeleton { lines: 3, label: "Loading your account…" } },
                         Some(Err(error)) => rsx! {
-                            p { class: "sub", "Could not load your account: {format_error(error)}" }
+                            RetryNotice {
+                                message: format!("Could not load your account: {}", state::describe(error)),
+                                onretry: move |_| attempt += 1,
+                            }
                         },
                         Some(Ok(identity)) => rsx! {
                             dl { class: "account-identity", id: "account-identity",
@@ -147,14 +156,5 @@ pub fn Account() -> Element {
                 }
             }
         }
-    }
-}
-
-/// Short, user-facing text for a failed call (matches the settings screen).
-fn format_error(error: &ApiError) -> String {
-    match error {
-        ApiError::Network(_) => "network error".to_owned(),
-        ApiError::Status(401) => "you are signed out".to_owned(),
-        ApiError::Status(status) => format!("server returned {status}"),
     }
 }
