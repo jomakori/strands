@@ -31,10 +31,10 @@ use crate::secrets::SecretKey;
 use crate::summary::Summarizer;
 use crate::summary::handlers::routes as summary_routes;
 use crate::tagging::{Tagger, UnconfiguredTagger};
-use strands_connector_photos::{PickerApi, UnconfiguredPicker};
 use crate::whatsapp::bridge::{Registry as WhatsAppRegistry, UnconfiguredFactory};
 use crate::whatsapp::routes as whatsapp_routes;
 use crate::whatsapp::store::SessionCipher;
+use strands_connector_photos::{PickerApi, UnconfiguredPicker};
 
 /// Everything a handler may reach.
 #[derive(Clone)]
@@ -132,6 +132,9 @@ impl AppState {
     /// routes report a misconfigured deploy instead of importing nothing.
     pub fn with_secrets(mut self, key: Arc<SecretKey>) -> Self {
         self.secrets = Some(key);
+        self
+    }
+
     /// Install the WhatsApp session registry and secret key (ticket T15).
     pub fn with_whatsapp(
         mut self,

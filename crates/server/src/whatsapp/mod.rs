@@ -251,8 +251,7 @@ fn link_state(state: LinkState) -> WhatsAppLinkState {
 fn cipher(state: &AppState) -> Result<&SessionCipher, AppError> {
     state.whatsapp_cipher.as_deref().ok_or_else(|| {
         AppError::Unavailable(
-            "WhatsApp is not configured on this server (STRANDS_SECRET_KEY is unset)"
-                .to_owned(),
+            "WhatsApp is not configured on this server (STRANDS_SECRET_KEY is unset)".to_owned(),
         )
     })
 }
