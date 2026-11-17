@@ -38,9 +38,9 @@ pub struct SessionCipher {
 }
 
 impl SessionCipher {
-    /// Read `STRANDS_CONNECTOR_SECRET_KEY` as base64 of exactly 32 bytes.
+    /// Read the shared connector key as base64 of exactly 32 bytes.
     pub fn from_env() -> Result<Self, std::env::VarError> {
-        let raw = std::env::var("STRANDS_CONNECTOR_SECRET_KEY")?;
+        let raw = std::env::var(crate::secrets::KEY_ENV)?;
         Self::from_base64(&raw).ok_or(std::env::VarError::NotPresent)
     }
 

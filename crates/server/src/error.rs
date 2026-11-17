@@ -27,7 +27,7 @@ pub enum AppError {
     /// access across users gets 404").
     NotFound,
     /// A feature this build has no backend for: the WhatsApp link without
-    /// `STRANDS_CONNECTOR_SECRET_KEY` configured, say.
+    /// `STRANDS_SECRET_KEY` configured, say.
     Unavailable(String),
     /// Our fault. Logged with its source, reported to the client as a bare 500.
     Internal {
