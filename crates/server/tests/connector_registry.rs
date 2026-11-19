@@ -76,7 +76,7 @@ fn app(pool: &PgPool, key: Option<Arc<SecretKey>>) -> Router {
             session_ttl_days: 30,
         },
         Arc::new(UnusedIdentity),
-        Arc::new(build_registry(pool.clone(), key.clone(), false)),
+        Arc::new(build_registry(pool.clone(), key.clone(), None, false)),
         Arc::new(strands_server::summary::LiteLlmSummarizer::new(
             strands_server::llm::LiteLlmClient::new("http://unused.invalid", "unused"),
         )),
@@ -276,15 +276,26 @@ async fn without_the_sealing_key_the_row_reports_unconfigured() {
 
     assert_eq!(
         rows.len(),
-        1,
-        "the release registry is Photos and nothing else"
+        2,
+        "the release registry is Photos and WhatsApp and nothing else"
     );
-    let row = &rows[0];
-    assert_eq!(row["id"], "photos");
+    let row = rows
+        .iter()
+        .find(|row| row["id"] == "photos")
+        .expect("photos row");
     assert!(row["status"].is_null());
     let error = row["error"].as_str().unwrap_or_default();
     assert!(error.contains("STRANDS_SECRET_KEY"), "got: {error}");
     assert!(error.contains("cannot be opened"), "got: {error}");
+
+    // The WhatsApp row is registered too, and says why it cannot link (T28).
+    let whatsapp = rows
+        .iter()
+        .find(|row| row["id"] == "whatsapp")
+        .expect("whatsapp row");
+    assert!(whatsapp["status"].is_null());
+    let error = whatsapp["error"].as_str().unwrap_or_default();
+    assert!(error.contains("STRANDS_SECRET_KEY"), "got: {error}");
 }
 
 /// The manifest the settings screen renders is the real one, not a placeholder.
@@ -293,7 +304,7 @@ async fn the_registered_connector_carries_its_real_manifest() {
     let Some(pool) = common::connect("connector_registry").await else {
         return;
     };
-    let registry = build_registry(pool.clone(), Some(test_key()), false);
+    let registry = build_registry(pool.clone(), Some(test_key()), None, false);
     let connector = registry.get("photos").expect("photos is registered");
     let manifest: &'static strands_core::connector::ConnectorManifest =
         Box::leak(Box::new(Connector::manifest(connector)));

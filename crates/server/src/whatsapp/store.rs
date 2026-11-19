@@ -106,6 +106,9 @@ impl SessionCipher {
 #[derive(Debug, Clone)]
 pub struct ConnectorRow {
     pub id: Uuid,
+    /// `connectors.status` as stored: the last thing this link did, which is the
+    /// only evidence left after a restart drops the in-memory session (T28).
+    pub status: String,
     pub allowlist: AllowList,
     pub last_sync_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
@@ -136,17 +139,25 @@ pub async fn connector(pool: &PgPool, user_id: Uuid) -> Result<ConnectorRow, App
     .fetch_one(pool)
     .await?;
 
-    let (config, last_sync_at, last_error) =
-        sqlx::query_as::<_, (serde_json::Value, Option<DateTime<Utc>>, Option<String>)>(
-            "SELECT config, last_sync_at, last_error FROM connectors WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
+    let (config, last_sync_at, last_error, status) = sqlx::query_as::<
+        _,
+        (
+            serde_json::Value,
+            Option<DateTime<Utc>>,
+            Option<String>,
+            String,
+        ),
+    >(
+        "SELECT config, last_sync_at, last_error, status::text FROM connectors WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
 
     let allowlist = parse_allowlist(&config)?;
     Ok(ConnectorRow {
         id,
+        status,
         allowlist,
         last_sync_at,
         last_error,

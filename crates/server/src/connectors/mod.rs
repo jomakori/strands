@@ -7,8 +7,10 @@
 //! own body (single lookup) — never a 500 that takes the rest down with it.
 
 mod photos;
+mod whatsapp;
 
 pub use photos::PhotosConnector;
+pub use whatsapp::WhatsAppConnector;
 
 use std::sync::Arc;
 
@@ -53,11 +55,20 @@ pub fn dev_connectors_enabled() -> bool {
 /// deploy can do. Everything else here is scaffolding — the stub, the
 /// deliberately failing connector and the four placeholders (Gmail, Notion,
 /// Drive, Telegram) exist to exercise row states — and stays behind `dev`.
-pub fn build_registry(pool: PgPool, secrets: Option<Arc<SecretKey>>, dev: bool) -> Registry {
+pub fn build_registry(
+    pool: PgPool,
+    secrets: Option<Arc<SecretKey>>,
+    whatsapp_sessions: Option<Arc<crate::whatsapp::bridge::Registry>>,
+    dev: bool,
+) -> Registry {
     use strands_core::connector::{FailingConnector, PlaceholderConnector, StubConnector};
 
     let mut registry = Registry::new();
-    registry.register(PhotosConnector::new(pool, secrets));
+    registry.register(PhotosConnector::new(pool.clone(), secrets));
+    // WhatsApp is always a row, configured or not: the spec's §7.7 asks for the
+    // connector to be visible, and an unconfigured deploy has to say *why* it
+    // cannot link instead of hiding the row (T28).
+    registry.register(WhatsAppConnector::new(pool, whatsapp_sessions));
 
     if dev {
         registry.register(StubConnector);
@@ -264,47 +275,52 @@ mod tests {
         PgPool::connect_lazy("postgres://strands@localhost/strands").unwrap()
     }
 
-    /// What a deploy registers: the one connector that can actually work, and
-    /// nothing that fakes a status. This is the test the settings screen hangs
-    /// on — "connectors appear once one is configured" must not stay true by
+    /// What a deploy registers: the two connectors that can actually work —
+    /// Google Photos and the WhatsApp bridge (spec §7.7) — and nothing that
+    /// fakes a status. This is the test the settings screen hangs on:
+    /// "connectors appear once one is configured" must not stay true by
     /// omission.
     #[tokio::test]
-    async fn a_release_registry_registers_the_photos_connector_and_no_scaffolding() {
-        let registry = build_registry(lazy_pool(), None, false);
+    async fn a_release_registry_registers_the_live_connectors_and_no_scaffolding() {
+        let registry = build_registry(lazy_pool(), None, None, false);
 
-        assert_eq!(registry.ids(), vec!["photos"]);
+        assert_eq!(registry.ids(), vec!["photos", "whatsapp"]);
         let manifest = registry.get("photos").unwrap().manifest();
         assert_eq!(manifest.label, "Google Photos");
         assert_eq!(manifest.scopes, photos::SCOPES);
+
+        let whatsapp = registry.get("whatsapp").unwrap().manifest();
+        assert_eq!(whatsapp.label, "WhatsApp");
+        // The phone grants a device session, not OAuth scopes.
+        assert!(whatsapp.scopes.is_empty());
     }
 
     /// The dev switch adds the scaffolding rows back, still in id order.
     #[tokio::test]
     async fn the_dev_switch_adds_the_scaffolding_connectors() {
-        let registry = build_registry(lazy_pool(), None, true);
+        let registry = build_registry(lazy_pool(), None, None, true);
 
         assert_eq!(
             registry.ids(),
             vec![
-                "drive", "failing", "gmail", "notion", "photos", "stub", "telegram"
+                "drive", "failing", "gmail", "notion", "photos", "stub", "telegram", "whatsapp"
             ],
         );
         assert!(registry.get("failing").is_some());
         assert!(registry.get("stub").is_some());
     }
 
-    /// Without the sealing key the photos row reports the deployment problem in
-    /// its own row — the pod logged exactly this on first boot — instead of
+    /// Without the sealing key both real rows report the deployment problem in
+    /// their own row — the pod logged exactly this on first boot — instead of
     /// panicking on boot or 500ing the whole settings screen.
     #[tokio::test]
-    async fn the_photos_row_reports_an_unconfigured_key_instead_of_crashing() {
-        let registry = build_registry(lazy_pool(), None, false);
+    async fn an_unconfigured_key_is_reported_in_each_real_row() {
+        let registry = build_registry(lazy_pool(), None, None, false);
 
         let Json(summaries) = list_connectors(State(test_state(registry)), fake_user()).await;
 
-        assert_eq!(summaries.len(), 1);
-        let photos = &summaries[0];
-        assert_eq!(photos.id, "photos");
+        assert_eq!(summaries.len(), 2);
+        let photos = summaries.iter().find(|row| row.id == "photos").unwrap();
         assert!(photos.status.is_none());
         let error = photos.error.as_deref().unwrap_or_default();
         assert!(
@@ -312,6 +328,14 @@ mod tests {
             "the row has to name the missing key, got: {error}"
         );
         assert!(error.contains("cannot be opened"), "got: {error}");
+
+        let whatsapp = summaries.iter().find(|row| row.id == "whatsapp").unwrap();
+        assert!(whatsapp.status.is_none());
+        let error = whatsapp.error.as_deref().unwrap_or_default();
+        assert!(
+            error.contains(crate::secrets::KEY_ENV),
+            "the WhatsApp row has to name the missing key, got: {error}"
+        );
     }
 
     #[tokio::test]

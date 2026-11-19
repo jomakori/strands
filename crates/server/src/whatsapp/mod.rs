@@ -7,9 +7,12 @@
 
 pub mod bridge;
 pub mod live;
+pub mod qr;
 pub mod store;
 
 use axum::extract::State;
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use strands_api_types::{
@@ -29,6 +32,7 @@ use store::{SessionCipher, StoredChat};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/whatsapp", get(status))
+        .route("/api/v1/whatsapp/qr.svg", get(qr_image))
         .route("/api/v1/whatsapp/pair", post(pair))
         .route("/api/v1/whatsapp/allowlist", put(set_allowlist))
         .route("/api/v1/whatsapp/import", post(import))
@@ -41,6 +45,36 @@ async fn status(
     user: CurrentUser,
 ) -> Result<Json<WhatsAppStatus>, AppError> {
     Ok(Json(build_status(&state, user.id).await?))
+}
+
+/// The live pairing payload as an SVG the phone can scan.
+///
+/// Served as its own response rather than a field on [`WhatsAppStatus`]: the QR
+/// changes every time the bridge refreshes it, and an `<img>` that only reloads
+/// when the payload changes keeps the status poll cheap.
+async fn qr_image(State(state): State<AppState>, user: CurrentUser) -> Result<Response, AppError> {
+    let payload = state
+        .whatsapp
+        .session(user.id)
+        .and_then(|session| match session.state() {
+            LinkState::AwaitingScan { qr: Some(code), .. } => Some(code.value),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            AppError::BadRequest("no pairing code is live: press Connect to start one".to_owned())
+        })?;
+    let svg = qr::svg(&payload).ok_or_else(|| {
+        AppError::Unavailable("the pairing code did not encode as a QR".to_owned())
+    })?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            // A stale QR is worse than none: it silently stops working.
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        svg,
+    )
+        .into_response())
 }
 
 /// Start pairing, or report the one already running.
@@ -224,13 +258,25 @@ async fn build_status(state: &AppState, user_id: Uuid) -> Result<WhatsAppStatus,
             .collect()
     };
 
+    let mut last_error = row.last_error.clone();
+    // A stored "connected" with no live session means the process that held the
+    // device link is gone: a restart drops the in-memory transport, and the
+    // phone is still linked upstream. Repair the row once and tell the user what
+    // to do, rather than showing a green link that can never receive anything.
+    if session.is_none() && row.status == "connected" {
+        let message = "the WhatsApp bridge is not holding a session (a restart drops the \
+                       device link): press Connect and scan again";
+        store::set_status(&state.pool, row.id, "needs_sign_in", Some(message)).await?;
+        last_error = Some(message.to_owned());
+    }
+
     Ok(WhatsAppStatus {
         state: link_state(state_snapshot),
         disclosure: WHATSAPP_DISCLOSURE.to_owned(),
         allowlist: row.allowlist.jids().iter().map(Jid::to_string).collect(),
         chats,
         last_sync_at: row.last_sync_at,
-        last_error: row.last_error,
+        last_error,
     })
 }
 
