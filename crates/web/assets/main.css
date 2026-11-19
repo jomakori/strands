@@ -775,15 +775,6 @@ button {
   border-radius: 999px;
   background: var(--border-strong);
 }
-
-/* Nothing to pull with a mouse, and a band of dead space above the first chip reads as a bug
- * on a desktop. The keyboard's `/` is the same door. */
-@media (pointer: fine) {
-  .pull {
-    display: none;
-  }
-}
-
 .sheet {
   position: fixed;
   inset: 0;
