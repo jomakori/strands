@@ -237,6 +237,21 @@ impl Harness {
             .status()
     }
 
+    async fn disconnect(&self, user: &User) -> StatusCode {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/whatsapp/disconnect")
+            .header(header::COOKIE, &user.cookie)
+            .body(Body::empty())
+            .expect("build disconnect request");
+        self.app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response")
+            .status()
+    }
+
     async fn import(&self, user: &User) -> (StatusCode, WhatsAppImportReport) {
         let request = Request::builder()
             .method("POST")
@@ -435,6 +450,71 @@ async fn inbound_text_is_attributed_and_attachments_are_skipped_visibly() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(report.notes_created, 0);
     assert_eq!(note_count(&harness.pool, user.id).await, 1);
+}
+
+#[tokio::test]
+async fn disconnect_purges_the_stored_session_and_revokes_the_link() {
+    let Some(harness) = Harness::connect().await else {
+        return;
+    };
+    let user = harness.user().await;
+    let session = harness.open_session(&user).await;
+    session.push(vec![message(ALLOWED, "D1", "unrelated", 11)]);
+    assert_eq!(
+        harness.set_allowlist(&user, &[ALLOWED]).await,
+        StatusCode::OK
+    );
+
+    // A linked account has session material at rest: the encrypted blob the
+    // next start would restore from.
+    sqlx::query(
+        "INSERT INTO connector_secrets (connector_id, user_id, ciphertext) \
+         SELECT id, user_id, '\\x00'::bytea FROM connectors \
+         WHERE user_id = $1 AND kind = 'whatsapp'",
+    )
+    .bind(user.id)
+    .execute(&harness.pool)
+    .await
+    .expect("seed a stored session");
+
+    assert_eq!(harness.disconnect(&user).await, StatusCode::OK);
+
+    // Read the database afterwards: the tokens are gone, and the row says so.
+    let stored: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM connector_secrets WHERE user_id = $1")
+            .bind(user.id)
+            .fetch_one(&harness.pool)
+            .await
+            .expect("count stored sessions");
+    assert_eq!(stored, 0, "disconnect must purge the session material");
+
+    let (status, last_error): (String, Option<String>) = sqlx::query_as(
+        "SELECT status::text, last_error FROM connectors \
+         WHERE user_id = $1 AND kind = 'whatsapp'",
+    )
+    .bind(user.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read connector row");
+    assert_eq!(status, "disconnected");
+    assert!(last_error.is_none(), "a clean disconnect clears the error");
+
+    // The forgotten session cannot be used to import: the next call finds no
+    // live link.
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/whatsapp/import")
+        .header(header::COOKIE, &user.cookie)
+        .body(Body::empty())
+        .expect("build import request");
+    let status = harness
+        .app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("router response")
+        .status();
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

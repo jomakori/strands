@@ -262,6 +262,25 @@ pub async fn clear_session(pool: &PgPool, connector_id: Uuid) -> Result<(), AppE
     Ok(())
 }
 
+/// Disconnect in one transaction: the stored session material and the tokens
+/// that came with it are deleted, and the row records that it is disconnected.
+///
+/// Both happen together so a crash cannot leave a row that claims to be
+/// disconnected while its credentials are still on disk, or the reverse.
+pub async fn disconnect(pool: &PgPool, connector_id: Uuid) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM connector_secrets WHERE connector_id = $1")
+        .bind(connector_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE connectors SET status = 'disconnected', last_error = NULL WHERE id = $1")
+        .bind(connector_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Replace the chat snapshot taken at pairing time.
 ///
 /// Chats that are no longer on the phone are dropped, so the list the user sees

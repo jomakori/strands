@@ -151,8 +151,7 @@ async fn disconnect(
         session.unlink().await?;
         state.whatsapp.forget(user.id);
     }
-    store::clear_session(&state.pool, row.id).await?;
-    store::set_status(&state.pool, row.id, "disconnected", None).await?;
+    store::disconnect(&state.pool, row.id).await?;
     Ok(Json(build_status(&state, user.id).await?))
 }
 
