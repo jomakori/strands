@@ -237,7 +237,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "/",
         label: "Search notes",
-        touch: "Tap Search",
+        touch: "Pull down on the grid",
         section: Section::Search,
         scope: Scope::Anywhere,
         key: Some(Key::Slash),
@@ -247,7 +247,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Ctrl K / Cmd K",
         label: "Search notes",
-        touch: "Tap Search",
+        touch: "Pull down on the grid",
         section: Section::Search,
         scope: Scope::Anywhere,
         key: Some(Key::K),
@@ -257,7 +257,7 @@ pub const BINDINGS: &[Binding] = &[
     Binding {
         keys: "Esc",
         label: "Close search",
-        touch: "Tap the close button",
+        touch: "Swipe up, or tap outside",
         section: Section::Search,
         scope: Scope::Search,
         key: Some(Key::Escape),

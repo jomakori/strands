@@ -15,6 +15,7 @@ use crate::detail::TagDetail;
 use crate::help::ShortcutMap;
 use crate::home::HomeView;
 use crate::keys::{self, Shortcuts};
+use crate::pull::Pull;
 use crate::search::SearchSheet;
 use crate::settings::Settings;
 
@@ -46,6 +47,10 @@ pub enum Route {
 #[component]
 pub fn Shell() -> Element {
     let shortcuts = use_context_provider(Shortcuts::new);
+    // The pull's state outlives both the grid and the sheet, so it is provided here rather
+    // than inside either: a finger that gets half way and then loses the route must not leave
+    // the panel stranded, and the keyboard's door clears whatever the last drag left behind.
+    let pull = use_context_provider(Pull::new);
     let navigator = use_navigator();
 
     keys::use_listener(shortcuts);
@@ -57,8 +62,12 @@ pub fn Shell() -> Element {
             return;
         };
         let mut state = shortcuts;
+        let mut pull = pull;
         match action {
-            Action::OpenSearch => state.search_open.set(true),
+            Action::OpenSearch => {
+                pull.show();
+                state.search_open.set(true);
+            }
             Action::CloseSearch => state.search_open.set(false),
             Action::OpenHelp => state.help_open.set(true),
             Action::CloseHelp => state.help_open.set(false),
