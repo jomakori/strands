@@ -64,7 +64,9 @@ test.describe("retry affordance", () => {
     );
 
     await page.goto("/");
-    await expect(page.locator("#grid [data-tag-id]").first()).toBeVisible();
+    // The grid read is stubbed to nothing above, so the surface is up once it has answered —
+    // an empty grid, not a sample one (T25). The account link is the shell's own footer.
+    await expect(page.locator("#account-link")).toBeVisible();
     await page.locator("#account-link").click();
     await expect(page).toHaveURL(/\/account$/);
 
@@ -239,7 +241,9 @@ test.describe("retry affordance", () => {
     });
 
     await page.goto("/");
-    await expect(page.locator("#grid [data-tag-id]").first()).toBeVisible();
+    // Every read fails here, the grid's included: the surface is up once the failure has been
+    // rendered, not when rows exist (T25 moved the grid onto the server's answer).
+    await expect(page.locator("#account-link")).toBeVisible();
     await page.keyboard.press(",");
     await expect(page).toHaveURL(/\/settings$/);
 

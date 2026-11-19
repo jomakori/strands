@@ -125,16 +125,43 @@ test.describe("sign-in gate", () => {
     // No cookie at all, and the API says this visitor has a session: the app must believe the
     // API. Together with the test above this is the whole claim — nothing here reads a cookie,
     // and nothing reads a token; `api::me` is the single source of truth (T24).
-    await page.route("**/api/v1/me", (route) =>
-      route.fulfill({
+    //
+    // The reads are answered here too, because the grid is a server read (T25): without them the
+    // tag call would 401 and the gate — not a grid — would be the correct screen.
+    await page.route("**/api/v1/**", (route) => {
+      const path = new URL(route.request().url()).pathname;
+      const body = path.endsWith("/me")
+        ? PROFILE
+        : path.endsWith("/categories")
+          ? [
+              {
+                id: "0c9a2d8e-0000-4000-8000-0000000000c1",
+                name: "Travel",
+                color: "#2F6F4F",
+                position: 0,
+              },
+            ]
+          : path.endsWith("/tags")
+            ? [
+                {
+                  id: "0c9a2d8e-0000-4000-8000-000000000001",
+                  name: "Tokyo",
+                  category_id: "0c9a2d8e-0000-4000-8000-0000000000c1",
+                  thread_count: 0,
+                  created_at: "2026-11-15T12:00:00Z",
+                },
+              ]
+            : [];
+      return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(PROFILE),
-      }),
-    );
+        body: JSON.stringify(body),
+      });
+    });
     await page.goto("/");
 
-    await expect(page.locator("#grid [data-tag-id]")).toHaveCount(16);
+    await expect(page.locator("#grid [data-tag-id]")).toHaveCount(1);
+    await expect(page.locator("#grid")).toContainText("Tokyo");
     await expect(page.locator("#gate")).toHaveCount(0);
   });
 

@@ -14,11 +14,24 @@ export const SESSION_COOKIE = "strands_session";
 /** A session id `serve.py` accepts — and the app does not trust for a moment. */
 export const SESSION_ID = "5f0c1f7a-0000-4000-8000-0000000000a1";
 
+/** The second seeded account, with its own disjoint rows (T25's isolation case). */
+export const SECOND_SESSION_ID = "5f0c1f7a-0000-4000-8000-0000000000a2";
+
+export const THIRD_SESSION_ID = "5f0c1f7a-0000-4000-8000-0000000000a3";
+
 /** The identity `/api/v1/me` answers with, as `strands_api_types::Profile`. */
 export const PROFILE = {
   id: "5f0c1f7a-0000-4000-8000-0000000000b1",
   email: "strands@example.test",
   name: "Strands User",
+  provider: "google",
+};
+
+/** The identity the second seeded account gets back from the same probe. */
+export const SECOND_PROFILE = {
+  id: "5f0c1f7a-0000-4000-8000-0000000000b2",
+  email: "other@example.test",
+  name: "Other User",
   provider: "google",
 };
 
@@ -44,6 +57,11 @@ export const signedIn: StorageState = {
 
 /** A browser that has never signed in: no cookies at all. */
 export const signedOut: StorageState = { cookies: [], origins: [] };
+
+/** A browser signed in as the account behind `sessionId` (the cookie is the only difference). */
+export function signedInAs(sessionId: string): StorageState {
+  return { cookies: [{ ...sessionCookie, value: sessionId }], origins: [] };
+}
 
 /** What the page saw, counted from its first frame. */
 export type GateWatch = { gate: boolean; probing: boolean; frames: number };

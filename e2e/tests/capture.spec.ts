@@ -76,11 +76,12 @@ test.describe("quick capture", () => {
 
     await page.locator('[data-testid="capture-save"]').click();
 
-    // Back on the grid, the note is already visible inside the Sapporo card.
+    // Back on the grid, the note is already visible inside the Sapporo card. The grid holds
+    // exactly what this test's stub served — nothing — plus the row the server just accepted.
     await expect(page).toHaveURL(/\/$/);
     const created = page.locator(`[data-tag-id="${TAG_ID}"]`);
     await expect(created).toContainText(NOTE);
-    await expect(page.locator("#grid [data-tag-id]")).toHaveCount(17);
+    await expect(page.locator("#grid [data-tag-id]")).toHaveCount(1);
 
     const { clientWidth, scrollWidth } = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,
