@@ -239,6 +239,12 @@ pub enum LinkState {
         pair_code: Option<PairingCode>,
     },
     Linked,
+    /// The transport died on its own — the phone unlinked the device, or the
+    /// client logged out. Distinct from [`LinkState::Unlinked`] because the row
+    /// has to say the bridge went down, not that the user disconnected.
+    Failed {
+        reason: String,
+    },
 }
 
 impl LinkState {
@@ -249,7 +255,7 @@ impl LinkState {
                 *slot = Some(qr);
                 Ok(())
             }
-            Self::Unlinked => Err(LinkError::NotPairing("qr code")),
+            Self::Unlinked | Self::Failed { .. } => Err(LinkError::NotPairing("qr code")),
             Self::Linked => Err(LinkError::AlreadyLinked("qr code")),
         }
     }
@@ -261,7 +267,7 @@ impl LinkState {
                 *pair_code = Some(code);
                 Ok(())
             }
-            Self::Unlinked => Err(LinkError::NotPairing("pair code")),
+            Self::Unlinked | Self::Failed { .. } => Err(LinkError::NotPairing("pair code")),
             Self::Linked => Err(LinkError::AlreadyLinked("pair code")),
         }
     }
@@ -274,7 +280,8 @@ impl LinkState {
                 Ok(())
             }
             Self::Linked => Ok(()),
-            Self::Unlinked => Err(LinkError::NotPairing("pair success")),
+            // A dead link cannot finish pairing: the session has to be replaced.
+            Self::Unlinked | Self::Failed { .. } => Err(LinkError::NotPairing("pair success")),
         }
     }
 
@@ -287,8 +294,23 @@ impl LinkState {
         Ok(())
     }
 
+    /// The transport reported that the device is gone without being asked.
+    pub fn on_failed(&mut self, reason: impl Into<String>) -> Result<(), LinkError> {
+        if matches!(self, Self::Failed { .. }) {
+            return Err(LinkError::NotLinked("failure"));
+        }
+        *self = Self::Failed {
+            reason: reason.into(),
+        };
+        Ok(())
+    }
+
     pub fn is_linked(&self) -> bool {
         matches!(self, Self::Linked)
+    }
+
+    pub fn is_dead(&self) -> bool {
+        matches!(self, Self::Unlinked | Self::Failed { .. })
     }
 }
 

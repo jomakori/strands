@@ -74,6 +74,7 @@ impl Connector for WhatsAppConnector {
                     LinkState::Linked => ConnectorStatus::Connected,
                     LinkState::AwaitingScan { .. } => ConnectorStatus::NeedsSignIn,
                     LinkState::Unlinked => ConnectorStatus::Disconnected,
+                    LinkState::Failed { .. } => ConnectorStatus::Error,
                 });
             }
 

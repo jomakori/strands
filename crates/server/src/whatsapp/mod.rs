@@ -85,6 +85,20 @@ async fn pair(
     let cipher = cipher(&state)?;
     let row = store::connector(&state.pool, user.id).await?;
 
+    // A session the bridge reports as dead is not a pairing in progress: drop it
+    // and start a fresh one, which is what makes Retry pairing work.
+    if let Some(session) = state.whatsapp.session(user.id)
+        && session.state().is_dead()
+    {
+        state.whatsapp.forget(user.id);
+    }
+    // A session the bridge reports as dead is not a pairing in progress: drop it
+    // and start a fresh one, which is what makes Retry pairing work.
+    if let Some(session) = state.whatsapp.session(user.id)
+        && session.state().is_dead()
+    {
+        state.whatsapp.forget(user.id);
+    }
     if state.whatsapp.session(user.id).is_none() {
         // A parked session means the phone is still linked: reopen it instead of
         // asking the user to scan again.
@@ -271,6 +285,22 @@ async fn build_status(state: &AppState, user_id: Uuid) -> Result<WhatsAppStatus,
         last_error = Some(message.to_owned());
     }
 
+    // A live, healthy link is the truth: record it, so a row that had been
+    // marked failed recovers as soon as the retry succeeds.
+    if state_snapshot.is_linked() && row.status != "connected" {
+        store::set_status(&state.pool, row.id, "connected", None).await?;
+        last_error = None;
+    }
+
+    // A live session that died on its own is a failure, not a user action: the
+    // row has to say so, and only the bridge is affected.
+    if let LinkState::Failed { reason } = &state_snapshot {
+        if row.status != "error" || row.last_error.as_deref() != Some(reason.as_str()) {
+            store::set_status(&state.pool, row.id, "error", Some(reason)).await?;
+        }
+        last_error = Some(reason.clone());
+    }
+
     Ok(WhatsAppStatus {
         state: link_state(state_snapshot),
         disclosure: WHATSAPP_DISCLOSURE.to_owned(),
@@ -292,6 +322,7 @@ fn link_state(state: LinkState) -> WhatsAppLinkState {
             pair_code: pair_code.map(|code| code.value),
         },
         LinkState::Linked => WhatsAppLinkState::Linked,
+        LinkState::Failed { reason } => WhatsAppLinkState::Failed { reason },
     }
 }
 

@@ -304,7 +304,14 @@ impl SessionFactory for LiveFactory {
                 })
                 .on_logged_out(move |_info| {
                     let shared = Arc::clone(&logged_out);
-                    async move { shared.mutate(LinkState::on_unlinked) }
+                    async move {
+                        shared.mutate(|state| {
+                            state.on_failed(
+                                "the phone unlinked this device or the bridge logged out: \\
+                                 press Retry pairing to link it again",
+                            )
+                        })
+                    }
                 })
                 // The only place a message is ever read, and it only copies
                 // text out of the event: no reply is ever sent from here.

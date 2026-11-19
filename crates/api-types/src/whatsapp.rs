@@ -31,6 +31,9 @@ pub enum WhatsAppLinkState {
     },
     /// The phone is linked and the chat list is available.
     Linked,
+    /// The bridge went down on its own (the phone unlinked this device, or the
+    /// client logged out). The row says so and offers a retry.
+    Failed { reason: String },
 }
 
 /// One chat as the phone reports it, plus whether this account allows it.

@@ -163,6 +163,7 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
     let (chip_key, chip_text) = match (&state, error().is_some()) {
         (Some(WhatsAppLinkState::Linked), _) => ("connected", "Connected"),
         (Some(WhatsAppLinkState::AwaitingScan { .. }), _) => ("needs-sign-in", "Scan the code"),
+        (Some(WhatsAppLinkState::Failed { .. }), _) => ("error", "Bridge down"),
         (Some(WhatsAppLinkState::Unlinked), true) => ("error", "Link failed"),
         (Some(WhatsAppLinkState::Unlinked), false) => ("disconnected", "Disconnected"),
         (None, true) => ("error", "Error"),
@@ -211,7 +212,10 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
                         }
                     }
                 },
-                Some(WhatsAppLinkState::Linked) | Some(WhatsAppLinkState::Unlinked) | None => rsx! {},
+                Some(WhatsAppLinkState::Linked)
+                | Some(WhatsAppLinkState::Unlinked)
+                | Some(WhatsAppLinkState::Failed { .. })
+                | None => rsx! {},
             }
 
             if let Some(status) = snapshot.as_ref() {

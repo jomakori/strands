@@ -17,7 +17,9 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-use strands_api_types::{WhatsAppAllowlist, WhatsAppImportReport};
+use strands_api_types::{
+    WhatsAppAllowlist, WhatsAppImportReport, WhatsAppLinkState, WhatsAppStatus,
+};
 use strands_core::{Registry as CoreRegistry, UserId};
 use strands_server::app::{AppState, router};
 use strands_server::auth::identity::BoxFuture;
@@ -50,6 +52,14 @@ impl FakeSession {
 
     fn push(&self, messages: Vec<BufferedMessage>) {
         self.buffer.lock().expect("buffer lock").extend(messages);
+    }
+
+    /// Make the transport report that it died, the way a logout from the phone
+    /// reaches the running client.
+    fn fail(&self, reason: &str) {
+        *self.state.lock().expect("state lock") = LinkState::Failed {
+            reason: reason.to_owned(),
+        };
     }
 }
 
@@ -115,6 +125,14 @@ impl SessionFactory for FakeFactory {
         _restore: Option<Vec<u8>>,
     ) -> BoxFuture<'_, Result<Arc<dyn WhatsAppSession>, WhatsAppError>> {
         let session = self.session(user_id);
+        // Opening a session is how a retry starts: a fresh client is live, so a
+        // previously failed one comes back healthy.
+        {
+            let mut state = session.state.lock().expect("state lock");
+            if state.is_dead() {
+                *state = LinkState::Linked;
+            }
+        }
         Box::pin(async move { Ok(session as Arc<dyn WhatsAppSession>) })
     }
 }
@@ -215,6 +233,47 @@ impl Harness {
             .await
             .expect("open fake session");
         session
+    }
+
+    async fn status(&self, user: &User) -> (StatusCode, WhatsAppStatus) {
+        let request = Request::builder()
+            .uri("/api/v1/whatsapp")
+            .header(header::COOKIE, &user.cookie)
+            .body(Body::empty())
+            .expect("build status request");
+        let response = self
+            .app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response");
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1 << 20)
+            .await
+            .expect("read status body");
+        let status_body = serde_json::from_slice(&bytes).unwrap_or_else(|error| {
+            panic!(
+                "decode status ({status}): {error}: {}",
+                String::from_utf8_lossy(&bytes)
+            )
+        });
+        (status, status_body)
+    }
+
+    /// Press the row's connect/retry action.
+    async fn pair(&self, user: &User) -> StatusCode {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/v1/whatsapp/pair")
+            .header(header::COOKIE, &user.cookie)
+            .body(Body::empty())
+            .expect("build pair request");
+        self.app
+            .clone()
+            .oneshot(request)
+            .await
+            .expect("router response")
+            .status()
     }
 
     async fn set_allowlist(&self, user: &User, jids: &[&str]) -> StatusCode {
@@ -515,6 +574,111 @@ async fn disconnect_purges_the_stored_session_and_revokes_the_link() {
         .expect("router response")
         .status();
     assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_failed_bridge_marks_the_row_and_retry_recovers_it() {
+    let Some(harness) = Harness::connect().await else {
+        return;
+    };
+    let user = harness.user().await;
+    let session = harness.open_session(&user).await;
+    session.push(vec![message(ALLOWED, "F1", "keep me", 12)]);
+    assert_eq!(
+        harness.set_allowlist(&user, &[ALLOWED]).await,
+        StatusCode::OK
+    );
+    let (status, report) = harness.import(&user).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(report.notes_created, 1);
+
+    // The transport dies on its own: the phone unlinked this device.
+    let reason = "the phone unlinked this device";
+    session.fail(reason);
+
+    let (status, body) = harness.status(&user).await;
+    assert_eq!(status, StatusCode::OK);
+    match &body.state {
+        WhatsAppLinkState::Failed { reason: said } => assert_eq!(said, reason),
+        other => panic!("expected a failure state, got {other:?}"),
+    }
+    assert_eq!(body.last_error.as_deref(), Some(reason));
+    // Nothing else degrades: the allowlist, the chat list and the notes stay.
+    assert_eq!(body.allowlist, vec![ALLOWED.to_owned()]);
+    assert_eq!(note_count(&harness.pool, user.id).await, 1);
+
+    // The row records the failure, so a restart cannot silently look healthy.
+    let (row_status, row_error): (String, Option<String>) = sqlx::query_as(
+        "SELECT status::text, last_error FROM connectors \
+         WHERE user_id = $1 AND kind = 'whatsapp'",
+    )
+    .bind(user.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read connector row");
+    assert_eq!(row_status, "error");
+    assert_eq!(row_error.as_deref(), Some(reason));
+
+    // Retry pairing replaces the dead session and the row comes back healthy.
+    assert_eq!(harness.pair(&user).await, StatusCode::OK);
+    let (status, body) = harness.status(&user).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body.state, WhatsAppLinkState::Linked);
+    let (row_status, row_error): (String, Option<String>) = sqlx::query_as(
+        "SELECT status::text, last_error FROM connectors \
+         WHERE user_id = $1 AND kind = 'whatsapp'",
+    )
+    .bind(user.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read connector row");
+    assert_eq!(row_status, "connected");
+    assert!(row_error.is_none(), "a recovered link clears the error");
+}
+
+#[tokio::test]
+async fn a_stored_link_survives_a_restart_as_needs_sign_in() {
+    let Some(harness) = Harness::connect().await else {
+        return;
+    };
+    let user = harness.user().await;
+    assert_eq!(
+        harness.set_allowlist(&user, &[ALLOWED]).await,
+        StatusCode::OK
+    );
+    // What the previous process left behind: a row that said connected, and no
+    // live session in this one, because the transport lived in memory.
+    sqlx::query(
+        "UPDATE connectors SET status = 'connected', last_error = NULL \
+         WHERE user_id = $1 AND kind = 'whatsapp'",
+    )
+    .bind(user.id)
+    .execute(&harness.pool)
+    .await
+    .expect("seed the stored link state");
+
+    let (status, body) = harness.status(&user).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body.state,
+        WhatsAppLinkState::Unlinked,
+        "without a session the row must not claim to be linked"
+    );
+    let error = body.last_error.expect("the row explains what happened");
+    assert!(
+        error.contains("restart"),
+        "the explanation names the restart: {error}"
+    );
+
+    // The repair is written once, so the next read does not say connected again.
+    let row_status: String = sqlx::query_scalar(
+        "SELECT status::text FROM connectors WHERE user_id = $1 AND kind = 'whatsapp'",
+    )
+    .bind(user.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read connector row");
+    assert_eq!(row_status, "needs_sign_in");
 }
 
 #[tokio::test]
