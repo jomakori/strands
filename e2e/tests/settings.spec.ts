@@ -60,7 +60,7 @@ async function openSettings(page: Page) {
 test.describe("connector settings rows", () => {
   test("shows needs-sign-in, connected and failing rows side by side", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.route("**/api/v1/**", async (route) => {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/me")) {
@@ -107,6 +107,11 @@ test.describe("connector settings rows", () => {
     await expect(gmail.locator(".connector-scope")).toHaveText([
       "gmail.readonly",
     ]);
+
+    await page.screenshot({
+      path: `captures/${testInfo.project.name}-settings-connectors.png`,
+      fullPage: true,
+    });
   });
 
   test("a connector whose status check failed shows the reason and keeps its row", async ({
