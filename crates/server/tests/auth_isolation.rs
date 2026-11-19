@@ -197,11 +197,14 @@ impl Harness {
             .await;
         assert_eq!(status, StatusCode::SEE_OTHER, "callback for {code}");
 
+        // The callback answers with two cookies — the session and the cleared deep-link marker —
+        // so pick the session by name rather than trusting header order.
         let set_cookie = headers
-            .get(header::SET_COOKIE)
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .find(|value| value.starts_with("strands_session="))
             .expect("callback sets a session cookie")
-            .to_str()
-            .unwrap()
             .to_owned();
 
         // Cookie contract from spec §6, checked on the real header.
