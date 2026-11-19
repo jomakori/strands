@@ -3931,8 +3931,11 @@ dependencies = [
 name = "strands-web"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "dioxus",
+ "futures",
  "gloo-net",
+ "js-sys",
  "serde",
  "strands-api-types",
  "strands-keymap",

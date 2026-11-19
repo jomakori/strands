@@ -3,6 +3,10 @@
 //! Reached from the grid at `/tags/:tag_id`. The card mirrors the grid's eyebrow/name
 //! pattern; the path stack below it lists every thread with its breadcrumb of path
 //! segments (category → tag → thread), each entry collapsible independently.
+//!
+//! The card's identity comes from the grid, which `home::install` has already read from the
+//! server (T25); the threads come from `GET /api/v1/tags/{id}/threads`, so the stack shows
+//! every thread the server holds rather than the three previews a card carries.
 
 use dioxus::prelude::*;
 use strands_api_types::{
@@ -11,18 +15,29 @@ use strands_api_types::{
 use strands_keymap::Action;
 use uuid::Uuid;
 
-use crate::api;
+use crate::api::{self, ApiError};
 use crate::data::{self, Tag, ThreadPreview};
-use crate::home::{CatGlyph, Grid};
+use crate::home::{CatGlyph, Grid, HomeLoad, Phase};
 use crate::keys::Shortcuts;
 use crate::routes::Route;
-use crate::state::{EmptyNotice, RetryNotice, Skeleton};
+use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
+
+/// The thread stack as one read of the server left it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Threads {
+    Loading,
+    Ready(Vec<ThreadPreview>),
+    Failed(String),
+}
 
 /// The whole detail screen: a back link, the tag card, and the path stack.
 #[component]
 pub fn TagDetail(tag_id: String) -> Element {
-    // Same grid the home surface renders, so a just-captured note is already in its tag.
+    // Same grid the home surface renders, so a just-captured note is already in its tag; the
+    // grid is read from the server once per app load, so a deep link waits for that read too.
     let grid = use_context::<Grid>().0;
+    let load = use_context::<HomeLoad>();
+    let phase = load.phase;
     let tag = data::find_tag(&grid(), &tag_id);
 
     rsx! {
@@ -34,9 +49,18 @@ pub fn TagDetail(tag_id: String) -> Element {
             }
             main { class: "feed", "aria-label": "Tag detail",
                 div { class: "feed-inner",
-                    match tag {
-                        Some(tag) => rsx! { DetailCard { tag } },
-                        None => rsx! { p { class: "sub", "Tag not found." } },
+                    match (phase(), tag) {
+                        (Phase::Loading, _) => rsx! {
+                            Skeleton { lines: 4, label: "Reading this tag".to_string() }
+                        },
+                        (Phase::Failed(message), _) => rsx! {
+                            RetryNotice {
+                                message,
+                                onretry: move |_| crate::home::retry(grid, load),
+                            }
+                        },
+                        (Phase::Ready, Some(tag)) => rsx! { DetailCard { tag } },
+                        (Phase::Ready, None) => rsx! { p { class: "sub", "Tag not found." } },
                     }
                 }
             }
@@ -50,27 +74,40 @@ fn DetailCard(tag: Tag) -> Element {
     let shortcuts = use_context::<Shortcuts>();
     let grid = use_context::<Grid>().0;
     let notice = use_signal(|| None::<String>);
+    let threads = use_signal(|| Threads::Loading);
     let tag_id = tag.id.clone();
     let thread_label = data::thread_plural(tag.thread_count);
-    let latest = tag
-        .threads
-        .first()
-        .map(|thread| data::relative(thread.age_minutes));
+
+    // The stack is every thread the server holds, not the three previews a card carries.
+    {
+        let tag_id = tag_id.clone();
+        use_hook(move || read_threads(threads, &tag_id));
+    }
+
+    let latest = match threads() {
+        Threads::Ready(rows) => rows
+            .first()
+            .map(|thread| data::relative(thread.age_minutes)),
+        _ => None,
+    };
 
     // The rows can archive; the card owns the line that says what happened.
     use_context_provider(|| DetailNotice(notice));
 
     // `X` archives the row that has focus. The map owns the key, the focused row names
     // the target, so the keyboard archives exactly what the pointer would.
-    use_effect(move || {
-        if shortcuts
-            .take_screen_action(&[Action::ArchiveThread])
-            .is_some()
-            && let Some(thread_id) = focused_thread_id()
-        {
-            archive(grid, &tag_id, &thread_id, notice);
-        }
-    });
+    {
+        let tag_id = tag_id.clone();
+        use_effect(move || {
+            if shortcuts
+                .take_screen_action(&[Action::ArchiveThread])
+                .is_some()
+                && let Some(thread_id) = focused_thread_id()
+            {
+                archive(grid, threads, &tag_id, &thread_id, notice);
+            }
+        });
+    }
 
     rsx! {
         article {
@@ -95,12 +132,61 @@ fn DetailCard(tag: Tag) -> Element {
             p { class: "notice", id: "detail-notice", role: "status", "{text}" }
         }
         SummaryCard { tag_id: tag.id.to_string() }
-        div { class: "path-stack", id: "path-stack", role: "list", "aria-label": "Threads",
-            for thread in tag.threads.iter() {
-                PathEntry { key: "{thread.id}", tag: tag.clone(), thread: thread.clone() }
+        {
+            let retry_id = tag_id.clone();
+            match threads() {
+                Threads::Loading => rsx! {
+                    Skeleton { lines: 3, label: "Reading these threads".to_string() }
+                },
+                Threads::Failed(message) => rsx! {
+                    RetryNotice {
+                        message,
+                        onretry: move |_| read_threads(threads, &retry_id),
+                    }
+                },
+                Threads::Ready(rows) => rsx! {
+                    if rows.is_empty() {
+                        EmptyNotice {
+                            title: "No threads yet".to_string(),
+                            hint: "Capture a note and it lands in this tag.".to_string(),
+                        }
+                    }
+                    div { class: "path-stack", id: "path-stack", role: "list", "aria-label": "Threads",
+                        for thread in rows.iter() {
+                            PathEntry {
+                                key: "{thread.id}",
+                                tag: tag.clone(),
+                                thread: thread.clone(),
+                                threads,
+                            }
+                        }
+                    }
+                },
             }
         }
     }
+}
+
+/// Read this tag's threads from the server into the stack's state.
+fn read_threads(mut threads: Signal<Threads>, tag_id: &str) {
+    let Ok(id) = Uuid::parse_str(tag_id) else {
+        threads.set(Threads::Failed("this tag has no server id".to_owned()));
+        return;
+    };
+    threads.set(Threads::Loading);
+    spawn(async move {
+        match api::list_threads(id).await {
+            Ok(rows) => {
+                let now = data::now();
+                let previews = rows.iter().map(|row| data::preview(row, now)).collect();
+                threads.set(Threads::Ready(previews));
+            }
+            // The gate already took over; an error panel would only describe a request the
+            // visitor is about to be asked to make again.
+            Err(ApiError::Status(401)) => {}
+            Err(error) => threads.set(Threads::Failed(state::describe(&error))),
+        }
+    });
 }
 
 /// The card's one-line feedback; the rows write to it so an archive is never silent.
@@ -121,9 +207,11 @@ fn announce(notice: &mut Signal<Option<String>>, archived: Option<String>) {
 }
 
 /// Archive a thread: the server is asked first and the row only leaves the grid once it
-/// has accepted, so a refused request cannot hide a thread that is still live.
+/// has accepted, so a refused request cannot hide a thread that is still live. The stack then
+/// re-reads the tag, so what is left on screen is what the server still holds.
 fn archive(
     grid: Signal<Vec<Tag>>,
+    threads: Signal<Threads>,
     tag_id: &str,
     thread_id: &str,
     mut notice: Signal<Option<String>>,
@@ -139,6 +227,7 @@ fn archive(
             Ok(()) => {
                 let archived = archive_thread(grid, &tag_id, &thread_id);
                 announce(&mut notice, archived);
+                read_threads(threads, &tag_id);
             }
             Err(error) => notice.set(Some(format!("Could not archive: {error}"))),
         }
@@ -159,7 +248,7 @@ fn focused_thread_id() -> Option<String> {
 /// Starts expanded so the stack's segments are visible without interaction, and stays
 /// collapsible so a crowded stack can be narrowed by hand.
 #[component]
-fn PathEntry(tag: Tag, thread: ThreadPreview) -> Element {
+fn PathEntry(tag: Tag, thread: ThreadPreview, threads: Signal<Threads>) -> Element {
     let mut open = use_signal(|| true);
     let grid = use_context::<Grid>().0;
     let notice = use_context::<DetailNotice>().0;
@@ -189,7 +278,7 @@ fn PathEntry(tag: Tag, thread: ThreadPreview) -> Element {
                     class: "path-archive",
                     r#type: "button",
                     "aria-label": "Archive “{thread.title}”",
-                    onclick: move |_| archive(grid, &tag_id, &thread_id, notice),
+                    onclick: move |_| archive(grid, threads, &tag_id, &thread_id, notice),
                     "Archive"
                 }
             }
@@ -282,9 +371,8 @@ fn guide_label(guide: &SummaryGuide) -> String {
 /// work on this card alone.
 #[component]
 fn SummaryCard(tag_id: String) -> Element {
-    // The fixture-driven grid carries placeholder ids ("t1"), which are mapped to a
-    // stable synthetic UUID so the card's review flow stays exercisable without a
-    // server (the e2e spec stubs the endpoints it calls).
+    // Tag ids are the server's UUIDs now (T25), so the parse is the whole story; the synthetic
+    // fallback only keeps a malformed id from putting the card in a state it cannot leave.
     let tag_uuid = Uuid::parse_str(&tag_id)
         .ok()
         .or_else(|| Some(Uuid::new_v5(&Uuid::NAMESPACE_OID, tag_id.as_bytes())));

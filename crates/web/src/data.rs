@@ -1,15 +1,21 @@
 //! The web client's only door to data (architecture §6: every read goes through one module).
 //!
-//! [`load_home`] returns a seeded fixture shaped like the `GET /api/v1/tags` projection the
-//! grid will consume: 16 tags across the five categories, each with its thread count and up
-//! to three thread previews. T4 landed the typed client; swapping the source for a network
-//! read is a change to this file alone — the views render [`Tag`] either way.
+//! [`home_rows`] maps the server's `GET /api/v1/tags` projection — plus the thread previews
+//! read from `GET /api/v1/tags/{id}/threads` — into the grid's view model: one [`Tag`] per
+//! row the server returned, its count as the server counted it, up to three previews. Nothing
+//! here invents a row; an empty answer renders the empty grid, not a sample one.
 //!
 //! The types live here, not in `strands-core`: this is the client-side view model. The wire
 //! types arrive with the client and get mapped into these.
 //!
 //! Rows are owned rather than `&'static` because quick capture (T12) inserts a note into the
 //! grid before the server answers, then rewrites it with the server's row.
+
+use std::collections::HashMap;
+
+use chrono::{DateTime, Utc};
+use strands_api_types::{CategorySummary, TagSummary, ThreadSummary};
+use uuid::Uuid;
 
 /// The five fixed categories (spec §4). Order here is the chip order on the home surface.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -51,6 +57,16 @@ impl Category {
             Category::Reading => "Reading",
             Category::Ideas => "Ideas",
         }
+    }
+
+    /// The category a server row names, matched on the label the server stores. Case- and
+    /// whitespace-insensitive because the name crosses a network boundary, where casing rules
+    /// are the writer's, not ours.
+    pub fn from_label(label: &str) -> Option<Self> {
+        let wanted = label.trim();
+        Self::ALL
+            .into_iter()
+            .find(|category| category.label().eq_ignore_ascii_case(wanted))
     }
 
     /// CSS custom-property holding this category's ink. Category hue is the only colour
@@ -127,34 +143,104 @@ pub struct Counts {
     pub threads: u32,
 }
 
-/// Read the home grid. Returns tags most-recently-active first (spec §7.1 grid ordering).
+/// How many previews a card carries (design: three lines of the most recent threads).
+pub const PREVIEWS: usize = 3;
+
+/// Every grid row the server returned, most-recently-active first (spec §7.1 grid ordering).
 ///
-/// Seeded until the grid reads the API; the signature already returns an owned `Vec` so the
-/// swap to a network call does not churn the caller.
-pub fn load_home() -> Vec<Tag> {
-    let mut tags: Vec<Tag> = SEED
+/// `threads` is keyed by tag id and holds only what the server answered for that tag; a tag
+/// whose preview read failed keeps its server count and renders without previews, which is a
+/// thinner card, not a wrong one. `now` is the render clock, because the server sends instants
+/// and the card shows ages.
+pub fn home_rows(
+    tags: &[TagSummary],
+    categories: &[CategorySummary],
+    threads: &HashMap<Uuid, Vec<ThreadSummary>>,
+    now: DateTime<Utc>,
+) -> Vec<Tag> {
+    let by_id: HashMap<Uuid, Category> = categories
         .iter()
-        .map(|(id, name, category, thread_count, threads)| Tag {
-            id: (*id).to_owned(),
-            name: (*name).to_owned(),
-            category: *category,
-            thread_count: *thread_count,
-            threads: threads
-                .iter()
-                .map(|(title, age_minutes)| ThreadPreview {
-                    id: format!("{id}-{}", title.len()),
-                    title: (*title).to_owned(),
-                    age_minutes: *age_minutes,
-                })
-                .collect(),
+        .filter_map(|category| {
+            category_at(category.position, &category.name).map(|mapped| (category.id, mapped))
         })
         .collect();
-    tags.sort_by_key(latest_activity);
-    tags
+
+    let mut rows: Vec<Tag> = tags
+        .iter()
+        .filter_map(|summary| {
+            // `by_id` is built from the categories the same server just returned, so a tag's
+            // category is always found. The filter only covers a tag pointing at a category id
+            // that is not in the caller's own list — data no chip can draw.
+            by_id.get(&summary.category_id).map(|category| {
+                tag_row(
+                    summary,
+                    *category,
+                    threads.get(&summary.id).map(Vec::as_slice),
+                    now,
+                )
+            })
+        })
+        .collect();
+    rows.sort_by_key(latest_activity);
+    rows
 }
 
-/// Look up one tag by id for the detail view. `None` when the id does not match any seed —
-/// the view renders a "not found" state rather than unwrapping.
+/// Which of the five categories a server row names: by seed position first (the order the
+/// server lays them down), then by name, for a server whose positions have drifted.
+pub fn category_at(position: i32, name: &str) -> Option<Category> {
+    usize::try_from(position)
+        .ok()
+        .and_then(|index| Category::ALL.get(index).copied())
+        .or_else(|| Category::from_label(name))
+}
+
+/// One grid card from one server row: identity and count from the summary, previews from the
+/// tag's thread list, newest first.
+pub fn tag_row(
+    summary: &TagSummary,
+    category: Category,
+    threads: Option<&[ThreadSummary]>,
+    now: DateTime<Utc>,
+) -> Tag {
+    let mut rows: Vec<&ThreadSummary> = threads.unwrap_or_default().iter().collect();
+    rows.sort_by_key(|row| std::cmp::Reverse(row.updated_at));
+
+    Tag {
+        id: summary.id.to_string(),
+        name: summary.name.clone(),
+        category,
+        thread_count: u32::try_from(summary.thread_count).unwrap_or(u32::MAX),
+        threads: rows
+            .into_iter()
+            .take(PREVIEWS)
+            .map(|thread| preview(thread, now))
+            .collect(),
+    }
+}
+
+/// Minutes between a server instant and the render clock, floored at zero so a clock that
+/// runs ahead of the server never renders a negative age.
+pub fn age_minutes(at: DateTime<Utc>, now: DateTime<Utc>) -> u32 {
+    (now - at).num_minutes().clamp(0, i64::from(u32::MAX)) as u32
+}
+
+/// The render clock. The server sends instants and the cards show ages, so the browser supplies
+/// "now" — the one clock both ends of this app can read.
+pub fn now() -> DateTime<Utc> {
+    DateTime::from_timestamp_millis(js_sys::Date::now() as i64).unwrap_or_default()
+}
+
+/// One preview line from one server thread row.
+pub fn preview(thread: &ThreadSummary, now: DateTime<Utc>) -> ThreadPreview {
+    ThreadPreview {
+        id: thread.id.to_string(),
+        title: thread.title.clone(),
+        age_minutes: age_minutes(thread.updated_at, now),
+    }
+}
+
+/// Look up one tag by id for the detail view. `None` when the server's rows do not hold that
+/// id — the view renders a "not found" state rather than unwrapping.
 pub fn find_tag(tags: &[Tag], tag_id: &str) -> Option<Tag> {
     tags.iter().find(|tag| tag.id == tag_id).cloned()
 }
@@ -356,162 +442,3 @@ pub fn tag_plural(n: usize) -> String {
         format!("{n} tags")
     }
 }
-
-const MINUTE: u32 = 1;
-const HOUR: u32 = 60 * MINUTE;
-const DAY: u32 = 24 * HOUR;
-
-/// The seeded home surface: 16 tags, five categories, real thread titles from the design
-/// reference so the layout is judged on realistic copy rather than lorem ipsum. Tuples keep
-/// the fixture readable now that [`Tag`] owns its strings.
-type Seed = (
-    &'static str,
-    &'static str,
-    Category,
-    u32,
-    &'static [(&'static str, u32)],
-);
-
-const SEED: &[Seed] = &[
-    (
-        "t1",
-        "Tokyo",
-        Category::Travel,
-        12,
-        &[
-            (
-                "The 6 a.m. train is not what the guidebooks promise",
-                3 * HOUR,
-            ),
-            ("Finding quiet in Shinjuku", 2 * DAY),
-            ("Vending machines as infrastructure", 6 * DAY),
-        ],
-    ),
-    (
-        "t2",
-        "Kyoto",
-        Category::Travel,
-        9,
-        &[
-            ("Walking the Philosopher's Path at golden hour", 9 * HOUR),
-            ("Moss and maintenance", 4 * DAY),
-        ],
-    ),
-    (
-        "t3",
-        "Berlin",
-        Category::Travel,
-        7,
-        &[
-            ("A night that starts at 2 a.m.", 22 * HOUR),
-            ("The Spree at sunrise", 8 * DAY),
-        ],
-    ),
-    (
-        "t4",
-        "Lisbon",
-        Category::Travel,
-        4,
-        &[("Learning to stop on the hills", 3 * DAY)],
-    ),
-    (
-        "t5",
-        "language models",
-        Category::Tech,
-        14,
-        &[
-            ("Reasoning is not the same as understanding", 14 * MINUTE),
-            ("Small models at the edge", 20 * HOUR),
-            ("Evaluating what we can't easily measure", 5 * DAY),
-        ],
-    ),
-    (
-        "t6",
-        "edge computing",
-        Category::Tech,
-        6,
-        &[("The cost of a round trip", 2 * HOUR)],
-    ),
-    (
-        "t7",
-        "TypeScript",
-        Category::Tech,
-        5,
-        &[("Types that say too much", 2 * DAY)],
-    ),
-    (
-        "t8",
-        "sourdough",
-        Category::Food,
-        8,
-        &[
-            ("Why my starter has a name", 45 * MINUTE),
-            ("Oven spring at altitude", 3 * DAY),
-        ],
-    ),
-    (
-        "t9",
-        "ramen",
-        Category::Food,
-        5,
-        &[("The third bowl is the best one", 7 * HOUR)],
-    ),
-    (
-        "t10",
-        "night markets",
-        Category::Food,
-        3,
-        &[("Order one thing at a time", 4 * DAY)],
-    ),
-    (
-        "t11",
-        "Moby-Dick",
-        Category::Reading,
-        11,
-        &[
-            ("The cetology chapters are a feature", 5 * HOUR),
-            ("What the whale is for", 9 * DAY),
-        ],
-    ),
-    (
-        "t12",
-        "essays",
-        Category::Reading,
-        6,
-        &[("The essay is a first draft of attention", 11 * HOUR)],
-    ),
-    (
-        "t13",
-        "notebooks",
-        Category::Reading,
-        4,
-        &[("Reading your old marginalia", 6 * DAY)],
-    ),
-    (
-        "t14",
-        "slow time",
-        Category::Ideas,
-        9,
-        &[
-            ("Doing one thing badly, on purpose", 30 * MINUTE),
-            ("The week has a shape", 4 * DAY),
-        ],
-    ),
-    (
-        "t15",
-        "questions",
-        Category::Ideas,
-        7,
-        &[
-            ("What would I do with a free Tuesday", 5 * HOUR),
-            ("Asking better follow-ups", 6 * DAY),
-        ],
-    ),
-    (
-        "t16",
-        "margin notes",
-        Category::Ideas,
-        2,
-        &[("Reading with a pencil is a conversation", 12 * HOUR)],
-    ),
-];

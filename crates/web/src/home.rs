@@ -1,32 +1,118 @@
 //! The home surface: five category chips, a counts header, and the tag grid.
 //!
+//! The grid is the server's rows: [`install`] reads `GET /api/v1/tags`, the caller's categories,
+//! and each tag's threads once per app load, and maps them into [`Tag`] (T25). Until that read
+//! answers the surface shows a skeleton; an empty answer is an empty state, not a sample grid;
+//! a failed read offers the same retry control as every other fetch-backed surface. A 401 never
+//! reaches these states — the client hands it to the gate (T24) through `session::refused`.
+//!
 //! Filtering is component state only — pressing a chip recomputes the visible set and the
 //! grid re-renders in place. No navigation, no reload, no server round trip (spec §7.1).
 //!
 //! The grid itself lives in a context signal (provided by `App`) so quick capture (T12) can
 //! insert a note optimistically and have the grid show it on the way back.
 
-use dioxus::prelude::*;
+use std::collections::HashMap;
 
+use dioxus::prelude::*;
+use strands_api_types::{CategorySummary, TagSummary, ThreadSummary};
+use uuid::Uuid;
+
+use crate::api::{self, ApiError};
 use crate::data::{self, Category, Tag};
 use crate::routes::Route;
+use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 
 /// The grid every surface reads: the app provides it once, capture mutates it, home renders it.
 #[derive(Clone, Copy)]
 pub struct Grid(pub Signal<Vec<Tag>>);
+
+/// Where the grid's one read stands. The rows live in [`Grid`]; this says whether they are
+/// still being read, are in hand, or could not be read at all.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Loading,
+    Ready,
+    Failed(String),
+}
+
+/// The grid's read, provided beside [`Grid`] so a route change does not re-ask the server and
+/// an optimistic capture survives the trip back to `/`.
+#[derive(Clone, Copy)]
+pub struct HomeLoad {
+    pub phase: Signal<Phase>,
+}
+
+/// Read the grid once, at app start, and hand every route the handle to it.
+pub fn install(grid: Signal<Vec<Tag>>) -> HomeLoad {
+    let load = HomeLoad {
+        phase: use_signal(|| Phase::Loading),
+    };
+    use_hook(|| read(grid, load));
+    load
+}
+
+/// Ask the server again after a failed read.
+pub fn retry(grid: Signal<Vec<Tag>>, load: HomeLoad) {
+    read(grid, load);
+}
+
+/// One read of the server's rows into the grid.
+fn read(mut grid: Signal<Vec<Tag>>, load: HomeLoad) {
+    let mut phase = load.phase;
+    spawn(async move {
+        phase.set(Phase::Loading);
+        match fetch().await {
+            Ok(rows) => {
+                grid.set(rows);
+                phase.set(Phase::Ready);
+            }
+            // The gate already took over: an error panel behind a sign-in screen would only
+            // describe a request the visitor is about to be asked to make again.
+            Err(ApiError::Status(401)) => {}
+            Err(error) => phase.set(Phase::Failed(state::describe(&error))),
+        }
+    });
+}
+
+/// The three reads the grid needs. Categories come first because a row without a category has
+/// no chip to sit under; the thread previews are advisory, so one failed preview read thins a
+/// card instead of failing the surface.
+async fn fetch() -> Result<Vec<Tag>, ApiError> {
+    let categories: Vec<CategorySummary> = api::list_categories().await?;
+    let tags: Vec<TagSummary> = api::list_tags().await?;
+
+    let answers = futures::future::join_all(tags.iter().map(|tag| api::list_threads(tag.id))).await;
+    let mut threads: HashMap<Uuid, Vec<ThreadSummary>> = HashMap::new();
+    for (tag, answer) in tags.iter().zip(answers) {
+        if let Ok(rows) = answer {
+            threads.insert(tag.id, rows);
+        }
+    }
+
+    Ok(data::home_rows(&tags, &categories, &threads, data::now()))
+}
 
 /// The whole home screen. Reads the grid through the context signal, so a note captured on
 /// the capture screen is already in the list when the user comes back.
 #[component]
 pub fn HomeView() -> Element {
     let grid = use_context::<Grid>().0;
+    let load = use_context::<HomeLoad>();
     let active = use_signal(Vec::<Category>::new);
 
+    let phase = load.phase;
     let all = grid();
     let shown = data::visible(&all, &active());
     let counts = data::counts(&shown);
     let tags_label = data::tag_plural(counts.tags);
     let threads_label = data::thread_plural(counts.threads);
+    let loaded = phase() == Phase::Ready;
+    let empty_title = if all.is_empty() {
+        "No tags yet"
+    } else {
+        "Nothing in these categories"
+    };
 
     rsx! {
         div { class: "app",
@@ -89,15 +175,40 @@ pub fn HomeView() -> Element {
                             }
                         }
                         p { class: "sub", id: "feed-count", "aria-live": "polite",
-                            "{tags_label} · {threads_label}"
-                        }
-                    }
-                    ul { class: "grid", id: "grid",
-                        for tag in shown.iter() {
-                            li { class: "grid-item", key: "{tag.id}",
-                                TagCard { tag: tag.clone() }
+                            // The header counts the rows in hand, so it equals what the server
+                            // listed — including zero. Until the read answers there are no rows
+                            // to count, and the line stays silent rather than printing a number
+                            // it would have to take back.
+                            if loaded {
+                                "{tags_label} · {threads_label}"
                             }
                         }
+                    }
+                    match phase() {
+                        Phase::Loading => rsx! {
+                            Skeleton { lines: 6, label: "Reading your tags".to_string() }
+                        },
+                        Phase::Failed(message) => rsx! {
+                            RetryNotice {
+                                message,
+                                onretry: move |_| retry(grid, load),
+                            }
+                        },
+                        Phase::Ready => rsx! {
+                            if shown.is_empty() {
+                                EmptyNotice {
+                                    title: empty_title.to_string(),
+                                    hint: "Capture a note and it lands in a tag here.".to_string(),
+                                }
+                            }
+                            ul { class: "grid", id: "grid",
+                                for tag in shown.iter() {
+                                    li { class: "grid-item", key: "{tag.id}",
+                                        TagCard { tag: tag.clone() }
+                                    }
+                                }
+                            }
+                        },
                     }
                     footer { class: "feed-foot",
                         Link { class: "back-link", id: "constellation-link", to: Route::Constellation {},

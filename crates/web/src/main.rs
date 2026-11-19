@@ -40,10 +40,13 @@ fn main() {
 /// The grid signal is provided here, above the gate, so it survives route changes: a note
 /// captured at `/capture` is already in the list when the user lands back on `/`. It is also
 /// why the gate cannot leak grid content — the screen, not the state, is what gets replaced.
+/// The rows themselves come from the server, read once by [`home::install`] (T25).
 #[component]
 fn App() -> Element {
-    let grid = use_signal(data::load_home);
+    let grid = use_signal(Vec::new);
     use_context_provider(|| Grid(grid));
+    let load = home::install(grid);
+    use_context_provider(|| load);
 
     let mut session = use_signal(|| Session::Probing);
     // `api` reports a refused call through this handle, which is how an in-app 401 gets the
