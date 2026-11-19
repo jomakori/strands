@@ -1,10 +1,17 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { PROFILE } from "../support/session";
+
 // Ticket T18. Every fetch that can fail has to hand the request back to the reader: a
 // notice that names what broke, a control that re-issues the same call, and no state
 // where the page only says "something went wrong". These specs stub the API at the
 // network boundary and then count the requests the app makes, so "the retry works" is
 // measured as a second request on the wire, not as a button that merely exists.
+//
+// One call is not retryable from inside the app: `GET /api/v1/me` above the router decides
+// whether there is a session at all (T24), and a failure there shows the gate. Every blanket
+// stub below therefore answers `/me` itself, and the account test fails only the call the
+// screen makes after the app is already open.
 
 /** Stub one endpoint to fail every time, and count the requests it received. */
 async function failing(page: Page, pattern: string) {
@@ -33,7 +40,22 @@ test.describe("retry affordance", () => {
     browserName,
   }, testInfo) => {
     void browserName;
-    const calls = await failing(page, "**/api/v1/me");
+    // The gate's probe has to answer, or the app never opens; the account screen's call is the
+    // one that fails, and that is the one this test retries.
+    const calls: string[] = [];
+    let answered = 0;
+    await page.route("**/api/v1/me", async (route) => {
+      calls.push(`${route.request().method()} ${new URL(route.request().url()).pathname}`);
+      answered += 1;
+      if (answered === 1) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(PROFILE),
+        });
+      }
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "boom" });
+    });
     await page.route("**/api/v1/tags", (route) =>
       route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
     );
@@ -203,10 +225,18 @@ test.describe("retry affordance", () => {
   });
 
   test("no failure notice is a dead end", async ({ page }) => {
-    // Everything the settings screen and the shell ask for fails at once.
-    await page.route("**/api/v1/**", (route) =>
-      route.fulfill({ status: 500, contentType: "text/plain", body: "boom" }),
-    );
+    // Everything the settings screen and the shell ask for fails at once — except the session
+    // probe, which is what decides whether there is an app to show (T24).
+    await page.route("**/api/v1/**", (route) => {
+      if (new URL(route.request().url()).pathname.endsWith("/me")) {
+        return route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(PROFILE),
+        });
+      }
+      return route.fulfill({ status: 500, contentType: "text/plain", body: "boom" });
+    });
 
     await page.goto("/");
     await expect(page.locator("#grid [data-tag-id]").first()).toBeVisible();
