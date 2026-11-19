@@ -3,8 +3,9 @@
 //! block the others" guarantee), and a placeholder for connectors not yet
 //! implemented (Gmail, Notion, Drive, Telegram — spec §7.7, T13).
 
-use super::{Connector, ConnectorError, ConnectorManifest};
+use super::{Connector, ConnectorError, ConnectorFuture, ConnectorManifest};
 use crate::ConnectorStatus;
+use uuid::Uuid;
 
 /// Always reports `Connected`. Exercises the happy path end to end — the
 /// registry, the API, and the settings screen all need at least one connector
@@ -20,19 +21,22 @@ impl Connector for StubConnector {
         }
     }
 
-    fn status(&self) -> Result<ConnectorStatus, ConnectorError> {
-        Ok(ConnectorStatus::Connected)
+    fn status<'a>(
+        &'a self,
+        _user: Uuid,
+    ) -> ConnectorFuture<'a, Result<ConnectorStatus, ConnectorError>> {
+        Box::pin(async { Ok(ConnectorStatus::Connected) })
     }
 
-    fn auth(&self) -> Result<(), ConnectorError> {
+    fn auth(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Ok(())
     }
 
-    fn sync(&self) -> Result<(), ConnectorError> {
+    fn sync(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Ok(())
     }
 
-    fn disconnect(&self) -> Result<(), ConnectorError> {
+    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Ok(())
     }
 }
@@ -51,19 +55,22 @@ impl Connector for FailingConnector {
         }
     }
 
-    fn status(&self) -> Result<ConnectorStatus, ConnectorError> {
+    fn status<'a>(
+        &'a self,
+        _user: Uuid,
+    ) -> ConnectorFuture<'a, Result<ConnectorStatus, ConnectorError>> {
+        Box::pin(async { Err(ConnectorError("upstream service is unreachable".to_owned())) })
+    }
+
+    fn auth(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Err(ConnectorError("upstream service is unreachable".to_owned()))
     }
 
-    fn auth(&self) -> Result<(), ConnectorError> {
+    fn sync(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Err(ConnectorError("upstream service is unreachable".to_owned()))
     }
 
-    fn sync(&self) -> Result<(), ConnectorError> {
-        Err(ConnectorError("upstream service is unreachable".to_owned()))
-    }
-
-    fn disconnect(&self) -> Result<(), ConnectorError> {
+    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Err(ConnectorError("upstream service is unreachable".to_owned()))
     }
 }
@@ -88,25 +95,28 @@ impl Connector for PlaceholderConnector {
         self.manifest
     }
 
-    fn status(&self) -> Result<ConnectorStatus, ConnectorError> {
-        Ok(ConnectorStatus::Disconnected)
+    fn status<'a>(
+        &'a self,
+        _user: Uuid,
+    ) -> ConnectorFuture<'a, Result<ConnectorStatus, ConnectorError>> {
+        Box::pin(async { Ok(ConnectorStatus::Disconnected) })
     }
 
-    fn auth(&self) -> Result<(), ConnectorError> {
+    fn auth(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Err(ConnectorError(format!(
             "{} is not yet implemented",
             self.manifest.label
         )))
     }
 
-    fn sync(&self) -> Result<(), ConnectorError> {
+    fn sync(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Err(ConnectorError(format!(
             "{} is not yet implemented",
             self.manifest.label
         )))
     }
 
-    fn disconnect(&self) -> Result<(), ConnectorError> {
+    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
         Err(ConnectorError(format!(
             "{} is not yet implemented",
             self.manifest.label
@@ -118,20 +128,31 @@ impl Connector for PlaceholderConnector {
 mod tests {
     use super::*;
 
-    #[test]
-    fn stub_connector_completes() {
-        assert_eq!(StubConnector.status(), Ok(ConnectorStatus::Connected));
+    /// Any id works: these connectors hold no per-user state.
+    fn user() -> Uuid {
+        Uuid::nil()
     }
 
-    #[test]
-    fn failing_connector_reports_its_own_error() {
-        assert!(FailingConnector.status().is_err());
+    #[tokio::test]
+    async fn stub_connector_completes() {
+        assert_eq!(
+            StubConnector.status(user()).await,
+            Ok(ConnectorStatus::Connected)
+        );
     }
 
-    #[test]
-    fn placeholder_connector_is_disconnected_not_errored() {
+    #[tokio::test]
+    async fn failing_connector_reports_its_own_error() {
+        assert!(FailingConnector.status(user()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn placeholder_connector_is_disconnected_not_errored() {
         let gmail = PlaceholderConnector::new("gmail", "Gmail", &["gmail.readonly"]);
-        assert_eq!(gmail.status(), Ok(ConnectorStatus::Disconnected));
-        assert!(gmail.auth().is_err());
+        assert_eq!(
+            gmail.status(user()).await,
+            Ok(ConnectorStatus::Disconnected)
+        );
+        assert!(gmail.auth(user()).is_err());
     }
 }

@@ -5,11 +5,10 @@
 use std::sync::Arc;
 
 use strands_connector_photos::GooglePicker;
-use strands_core::Registry;
-use strands_core::connector::{FailingConnector, PlaceholderConnector, StubConnector};
 use strands_server::app::{AppState, router};
 use strands_server::auth::identity::OidcIdentityProvider;
 use strands_server::config::AuthConfig;
+use strands_server::connectors::{build_registry, dev_connectors_enabled};
 use strands_server::db;
 use strands_server::gmaps::places::PlacesApiResolver;
 use strands_server::links::LiteLlmJudge;
@@ -46,7 +45,37 @@ async fn main() {
         identity.endpoints().userinfo,
     );
 
-    let registry = build_registry();
+    // Without the sealing key, stored connector tokens cannot be opened, so a
+    // pick could never start. Resolve it before the registry so the Photos
+    // connector's row and the pick routes share one key: with no key the row
+    // reports itself unconfigured instead of the process dying on first boot
+    // (which is exactly what the deployed pod logged).
+    let secrets: Option<Arc<SecretKey>> = match SecretKey::from_env() {
+        Some(Ok(key)) => Some(Arc::new(key)),
+        Some(Err(error)) => {
+            eprintln!("strands: STRANDS_SECRET_KEY is unusable ({error}); Google Photos is off");
+            None
+        }
+        None => {
+            eprintln!(
+                "strands: STRANDS_SECRET_KEY is not set; stored connector tokens cannot be \
+                 opened, so Google Photos will report itself unconfigured"
+            );
+            None
+        }
+    };
+
+    // The dev flag is a switch, not a build feature: a release binary that is
+    // asked for fake connectors still has to log that it is running them.
+    let dev_connectors = dev_connectors_enabled();
+    if dev_connectors {
+        eprintln!(
+            "strands: {} is set; registering the stub, the failing connector and the \
+             placeholders — this is a development server",
+            strands_server::connectors::DEV_CONNECTORS_ENV
+        );
+    }
+    let registry = build_registry(pool.clone(), secrets.clone(), dev_connectors);
 
     // Same fail-at-boot rule as the identity provider: a missing LiteLLM
     // config should never pass health checks and fail only on first use.
@@ -89,21 +118,9 @@ async fn main() {
         GooglePicker::new().expect("build the Google Photos Picker client"),
     ));
 
-    // Without the sealing key, stored connector tokens cannot be opened, so a
-    // pick could never start. Say so at boot rather than at the first tap.
-    let state = match SecretKey::from_env() {
-        Some(Ok(key)) => state.with_secrets(Arc::new(key)),
-        Some(Err(error)) => {
-            eprintln!("strands: STRANDS_SECRET_KEY is unusable ({error}); Google Photos is off");
-            state
-        }
-        None => {
-            eprintln!(
-                "strands: STRANDS_SECRET_KEY is not set; stored connector tokens cannot be \
-                 opened, so Google Photos picks will fail until it is"
-            );
-            state
-        }
+    let state = match &secrets {
+        Some(key) => state.with_secrets(Arc::clone(key)),
+        None => state,
     };
 
     // WhatsApp is optional in the same way, but for a different reason: the
@@ -151,33 +168,4 @@ async fn main() {
         .await
         .expect("bind 0.0.0.0:8080");
     axum::serve(listener, router(state)).await.expect("serve");
-}
-
-/// The process's connector set (T13): one working stub, one deliberately
-/// failing connector, and a disabled placeholder per not-yet-built service.
-fn build_registry() -> Registry {
-    let mut registry = Registry::new();
-    registry.register(StubConnector);
-    registry.register(FailingConnector);
-    registry.register(PlaceholderConnector::new(
-        "gmail",
-        "Gmail",
-        &["gmail.readonly"],
-    ));
-    registry.register(PlaceholderConnector::new(
-        "notion",
-        "Notion",
-        &["notion.read"],
-    ));
-    registry.register(PlaceholderConnector::new(
-        "drive",
-        "Drive",
-        &["drive.readonly"],
-    ));
-    registry.register(PlaceholderConnector::new(
-        "telegram",
-        "Telegram",
-        &["telegram.messages"],
-    ));
-    registry
 }

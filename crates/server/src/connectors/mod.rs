@@ -1,21 +1,31 @@
 //! Connector settings endpoints: `GET /api/v1/connectors` and
-//! `GET /api/v1/connectors/{id}/status` (spec §7.7, T13).
+//! `GET /api/v1/connectors/{id}/status` (spec §7.7, T13), plus this process's
+//! connector set (T27).
 //!
 //! Both handlers go straight through [`strands_core::Registry`]: a connector
 //! whose own status check fails still answers with its own row (list) or its
 //! own body (single lookup) — never a 500 that takes the rest down with it.
 
+mod photos;
+
+pub use photos::PhotosConnector;
+
+use std::sync::Arc;
+
 use axum::Json;
 use axum::Router;
 use axum::extract::{Path, State};
 use axum::routing::get;
+use sqlx::PgPool;
 use strands_api_types::{ConnectorStatus as WireStatus, ConnectorSummary};
 use strands_core::ConnectorStatus;
+use strands_core::Registry;
 use strands_core::connector::ConnectorReport;
 
 use crate::app::AppState;
 use crate::auth::CurrentUser;
 use crate::error::AppError;
+use crate::secrets::SecretKey;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -23,15 +33,70 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/connectors/{id}/status", get(connector_status))
 }
 
-/// Every registered connector, in the registry's stable id order.
+/// Environment switch that adds the stub, the deliberately failing connector
+/// and the not-yet-built placeholders. Never set it in a deployment: the fake
+/// rows it adds are indistinguishable from real ones on the settings screen.
+pub const DEV_CONNECTORS_ENV: &str = "STRANDS_DEV_CONNECTORS";
+
+/// Whether [`DEV_CONNECTORS_ENV`] asks for the fake connectors.
+pub fn dev_connectors_enabled() -> bool {
+    matches!(
+        std::env::var(DEV_CONNECTORS_ENV).as_deref(),
+        Ok("1") | Ok("true") | Ok("yes")
+    )
+}
+
+/// This process's connector set.
+///
+/// Google Photos is always registered: it is the one connector that can
+/// actually work, so a settings screen that omits it is lying about what the
+/// deploy can do. Everything else here is scaffolding — the stub, the
+/// deliberately failing connector and the four placeholders (Gmail, Notion,
+/// Drive, Telegram) exist to exercise row states — and stays behind `dev`.
+pub fn build_registry(pool: PgPool, secrets: Option<Arc<SecretKey>>, dev: bool) -> Registry {
+    use strands_core::connector::{FailingConnector, PlaceholderConnector, StubConnector};
+
+    let mut registry = Registry::new();
+    registry.register(PhotosConnector::new(pool, secrets));
+
+    if dev {
+        registry.register(StubConnector);
+        registry.register(FailingConnector);
+        registry.register(PlaceholderConnector::new(
+            "gmail",
+            "Gmail",
+            &["gmail.readonly"],
+        ));
+        registry.register(PlaceholderConnector::new(
+            "notion",
+            "Notion",
+            &["notion.read"],
+        ));
+        registry.register(PlaceholderConnector::new(
+            "drive",
+            "Drive",
+            &["drive.readonly"],
+        ));
+        registry.register(PlaceholderConnector::new(
+            "telegram",
+            "Telegram",
+            &["telegram.messages"],
+        ));
+    }
+
+    registry
+}
+
+/// Every registered connector for the caller, in the registry's stable id order.
 pub async fn list_connectors(
     State(state): State<AppState>,
-    _user: CurrentUser,
+    user: CurrentUser,
 ) -> Json<Vec<ConnectorSummary>> {
     Json(
         state
             .registry
-            .reports()
+            .reports(user.id)
+            .await
             .into_iter()
             .map(to_summary)
             .collect(),
@@ -41,12 +106,12 @@ pub async fn list_connectors(
 /// One connector's row, if and only if that id is registered.
 pub async fn connector_status(
     State(state): State<AppState>,
-    _user: CurrentUser,
+    user: CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Json<ConnectorSummary>, AppError> {
     let connector = state.registry.get(&id).ok_or(AppError::NotFound)?;
     let manifest = connector.manifest();
-    let (status, error) = match connector.status() {
+    let (status, error) = match connector.status(user.id).await {
         Ok(status) => (Some(map_status(status)), None),
         Err(error) => (None, Some(error.to_string())),
     };
@@ -193,6 +258,60 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(AppError::NotFound)));
+    }
+
+    fn lazy_pool() -> PgPool {
+        PgPool::connect_lazy("postgres://strands@localhost/strands").unwrap()
+    }
+
+    /// What a deploy registers: the one connector that can actually work, and
+    /// nothing that fakes a status. This is the test the settings screen hangs
+    /// on — "connectors appear once one is configured" must not stay true by
+    /// omission.
+    #[tokio::test]
+    async fn a_release_registry_registers_the_photos_connector_and_no_scaffolding() {
+        let registry = build_registry(lazy_pool(), None, false);
+
+        assert_eq!(registry.ids(), vec!["photos"]);
+        let manifest = registry.get("photos").unwrap().manifest();
+        assert_eq!(manifest.label, "Google Photos");
+        assert_eq!(manifest.scopes, photos::SCOPES);
+    }
+
+    /// The dev switch adds the scaffolding rows back, still in id order.
+    #[tokio::test]
+    async fn the_dev_switch_adds_the_scaffolding_connectors() {
+        let registry = build_registry(lazy_pool(), None, true);
+
+        assert_eq!(
+            registry.ids(),
+            vec![
+                "drive", "failing", "gmail", "notion", "photos", "stub", "telegram"
+            ],
+        );
+        assert!(registry.get("failing").is_some());
+        assert!(registry.get("stub").is_some());
+    }
+
+    /// Without the sealing key the photos row reports the deployment problem in
+    /// its own row — the pod logged exactly this on first boot — instead of
+    /// panicking on boot or 500ing the whole settings screen.
+    #[tokio::test]
+    async fn the_photos_row_reports_an_unconfigured_key_instead_of_crashing() {
+        let registry = build_registry(lazy_pool(), None, false);
+
+        let Json(summaries) = list_connectors(State(test_state(registry)), fake_user()).await;
+
+        assert_eq!(summaries.len(), 1);
+        let photos = &summaries[0];
+        assert_eq!(photos.id, "photos");
+        assert!(photos.status.is_none());
+        let error = photos.error.as_deref().unwrap_or_default();
+        assert!(
+            error.contains(crate::secrets::KEY_ENV),
+            "the row has to name the missing key, got: {error}"
+        );
+        assert!(error.contains("cannot be opened"), "got: {error}");
     }
 
     #[tokio::test]
