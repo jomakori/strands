@@ -13,7 +13,7 @@
 
 use axum::Router;
 use axum::extract::{Query, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use chrono::{Duration, Utc};
@@ -147,17 +147,25 @@ pub async fn callback(
 
     // 303 so the browser re-issues the follow-up as a GET without the `code`, and back to the
     // route they asked for — `/` for everyone who just pressed the button.
-    Ok((
-        [
-            (header::SET_COOKIE, cookie),
-            (
-                header::SET_COOKIE,
-                cleared_after_sign_in_cookie(state.auth.cookie_secure),
-            ),
-        ],
-        Redirect::to(&return_to),
-    )
-        .into_response())
+    // Two Set-Cookie headers on one response: appended, because the tuple-array helper inserts
+    // and would keep only the last — throwing the session away and leaving the visitor signed out
+    // after a successful sign-in.
+    let mut response = Redirect::to(&return_to).into_response();
+    for value in [
+        cookie,
+        cleared_after_sign_in_cookie(state.auth.cookie_secure),
+    ] {
+        response
+            .headers_mut()
+            .append(header::SET_COOKIE, cookie_header(value));
+    }
+    Ok(response)
+}
+
+/// Header value for a cookie this module built: a name, an opaque id and an HTTP date — all
+/// visible ASCII, so the conversion has nothing to reject.
+fn cookie_header(value: String) -> HeaderValue {
+    HeaderValue::from_str(&value).expect("cookie values are visible ASCII")
 }
 
 /// Revoke the session and clear the cookie.
