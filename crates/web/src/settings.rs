@@ -193,7 +193,7 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
                         if let Some(payload) = qr {
                             img {
                                 class: "whatsapp-qr",
-                                src: api::whatsapp_qr_url(&payload),
+                                src: api::whatsapp_qr_url(payload),
                                 alt: "WhatsApp pairing QR code",
                                 width: "220",
                                 height: "220",
