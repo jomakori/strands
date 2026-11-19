@@ -20,6 +20,8 @@ use strands_api_types::{
 };
 use uuid::Uuid;
 
+use crate::session;
+
 /// Failure modes a caller must handle: the request/parse itself failed, or
 /// the server answered but rejected it.
 #[derive(Debug)]
@@ -79,7 +81,7 @@ pub async fn archive_thread(id: Uuid) -> Result<(), ApiError> {
     if response.ok() {
         return Ok(());
     }
-    Err(ApiError::Status(response.status()))
+    Err(status_error(response.status()))
 }
 
 /// `GET /api/v1/connectors` — every registered connector's settings row.
@@ -170,7 +172,7 @@ pub async fn create_thread(body: &str, tag_id: Option<Uuid>) -> Result<ThreadDet
 pub async fn delete_my_data() -> Result<(), ApiError> {
     let response = Request::delete("/api/v1/account/data").send().await?;
     if !response.ok() {
-        return Err(ApiError::Status(response.status()));
+        return Err(status_error(response.status()));
     }
     Ok(())
 }
@@ -215,9 +217,19 @@ async fn send_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, Ap
 }
 
 /// One response body into `T`, mapping a non-2xx answer to `Status`.
+/// A non-2xx answer, funnelled through one place because 401 is special: it means the session
+/// behind whatever screen is open is gone, so the gate takes over instead of the caller
+/// painting an error panel inside a screen nobody is signed in to.
+fn status_error(status: u16) -> ApiError {
+    if status == 401 {
+        session::refused();
+    }
+    ApiError::Status(status)
+}
+
 async fn decode<T: DeserializeOwned>(response: gloo_net::http::Response) -> Result<T, ApiError> {
     if !response.ok() {
-        return Err(ApiError::Status(response.status()));
+        return Err(status_error(response.status()));
     }
     Ok(response.json().await?)
 }
