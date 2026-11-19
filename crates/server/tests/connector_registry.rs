@@ -201,9 +201,8 @@ async fn a_token_sealed_under_another_key_is_reported_not_hidden() {
     connect_photos(&pool, &user, &stored_key, "ya29.old-token").await;
 
     // A restart with a rotated STRANDS_SECRET_KEY: same rows, different key.
-    let rotated = Arc::new(
-        SecretKey::from_base64(&STANDARD.encode([8u8; 32])).expect("a 32-byte test key"),
-    );
+    let rotated =
+        Arc::new(SecretKey::from_base64(&STANDARD.encode([8u8; 32])).expect("a 32-byte test key"));
     let app = app(&pool, Some(rotated));
 
     let (status, row) = get_row(&app, &user, "photos").await;
@@ -275,7 +274,11 @@ async fn without_the_sealing_key_the_row_reports_unconfigured() {
         .to_bytes();
     let rows: Vec<Value> = serde_json::from_slice(&bytes).expect("rows as JSON");
 
-    assert_eq!(rows.len(), 1, "the release registry is Photos and nothing else");
+    assert_eq!(
+        rows.len(),
+        1,
+        "the release registry is Photos and nothing else"
+    );
     let row = &rows[0];
     assert_eq!(row["id"], "photos");
     assert!(row["status"].is_null());
@@ -292,13 +295,15 @@ async fn the_registered_connector_carries_its_real_manifest() {
     };
     let registry = build_registry(pool.clone(), Some(test_key()), false);
     let connector = registry.get("photos").expect("photos is registered");
-    let manifest: &'static strands_core::connector::ConnectorManifest = Box::leak(Box::new(
-        Connector::manifest(connector),
-    ));
+    let manifest: &'static strands_core::connector::ConnectorManifest =
+        Box::leak(Box::new(Connector::manifest(connector)));
 
     assert_eq!(manifest.label, "Google Photos");
     assert!(
-        manifest.scopes.iter().any(|scope| scope.contains("photospicker")),
+        manifest
+            .scopes
+            .iter()
+            .any(|scope| scope.contains("photospicker")),
         "the pick scopes, not a library listing: {:?}",
         manifest.scopes
     );
