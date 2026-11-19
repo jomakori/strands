@@ -76,4 +76,8 @@ pub struct WhatsAppImportReport {
     pub chats_skipped: usize,
     /// Notes actually inserted; duplicates and redeliveries leave this at 0.
     pub notes_created: usize,
+    /// Messages that were only an attachment (no text or caption) and were
+    /// therefore not imported. Attachments are never downloaded; counting them
+    /// here keeps the skip visible instead of silent.
+    pub media_skipped: usize,
 }

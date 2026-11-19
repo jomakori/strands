@@ -325,28 +325,42 @@ pub async fn chats(pool: &PgPool, user_id: Uuid) -> Result<Vec<StoredChat>, AppE
     Ok(chats)
 }
 
+/// What one write pass did: the notes it inserted, and the messages it
+/// deliberately left out because they carried an attachment and no text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WriteOutcome {
+    pub notes_created: usize,
+    pub media_skipped: usize,
+}
+
 /// Write one import pass inside a transaction: a thread per chat, one note per
 /// message, deduped by message id.
 ///
-/// Returns the number of notes actually inserted. Redeliveries and re-imports
-/// collide on `(user_id, dedupe_key)` and insert nothing, which is what makes a
-/// second "Sync now" safe.
+/// Redeliveries and re-imports collide on `(user_id, dedupe_key)` and insert
+/// nothing, which is what makes a second "Sync now" safe; `notes_created`
+/// counts only real insertions.
 pub async fn write_messages(
     pool: &PgPool,
     user_id: Uuid,
     category_id: Uuid,
     chats: &[(StoredChat, Vec<crate::whatsapp::bridge::BufferedMessage>)],
-) -> Result<usize, AppError> {
+) -> Result<WriteOutcome, AppError> {
     let mut tx = pool.begin().await?;
     let mut tags = TagIndex::load(&mut tx, user_id, category_id).await?;
     let tag_id = tags.resolve(&mut tx, user_id, IMPORT_TAG).await?;
 
-    let mut notes_created = 0usize;
+    let mut outcome = WriteOutcome::default();
     for (chat, messages) in chats {
         let thread_id = ensure_thread(&mut tx, user_id, tag_id, chat).await?;
         let mut newest: Option<DateTime<Utc>> = None;
         for message in messages {
             if message.body.trim().is_empty() {
+                // Attachments are not downloaded, so a message that is only an
+                // attachment imports as nothing — but it is counted, so the
+                // client can say it was skipped instead of losing it silently.
+                if message.media.is_some() {
+                    outcome.media_skipped += 1;
+                }
                 continue;
             }
             let note = Note::new(message.body.clone(), Source::WhatsApp)
@@ -379,7 +393,7 @@ pub async fn write_messages(
             if inserted.is_none() {
                 continue;
             }
-            notes_created += 1;
+            outcome.notes_created += 1;
             newest = Some(match newest {
                 Some(previous) => previous.max(message.sent_at),
                 None => message.sent_at,
@@ -406,7 +420,7 @@ pub async fn write_messages(
         .await?;
 
     tx.commit().await?;
-    Ok(notes_created)
+    Ok(outcome)
 }
 
 /// One thread per chat, reused across imports so the chat reads as a conversation.

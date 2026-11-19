@@ -241,10 +241,17 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
                                     match api::whatsapp_sync().await {
                                         Ok(report) => {
                                             error.set(None);
-                                            notice.set(Some(format!(
+                                            let mut line = format!(
                                                 "Imported {} notes from {} chats ({} chats not allowed).",
                                                 report.notes_created, report.chats_imported, report.chats_skipped
-                                            )));
+                                            );
+                                            if report.media_skipped > 0 {
+                                                line.push_str(&format!(
+                                                    " {} attachments had no caption and were skipped.",
+                                                    report.media_skipped
+                                                ));
+                                            }
+                                            notice.set(Some(line));
                                         }
                                         Err(failure) => error.set(Some(format!("Sync failed: {failure}"))),
                                     }

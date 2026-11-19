@@ -171,6 +171,7 @@ async fn drain_into_notes(
             notes_created: 0,
             chats_imported: 0,
             chats_skipped: selection.skipped_chats,
+            media_skipped: 0,
         });
     }
 
@@ -195,14 +196,15 @@ async fn drain_into_notes(
         .collect();
     let chats_imported = batches.len();
 
-    let notes_created = store::write_messages(&state.pool, user_id, category_id, &batches).await?;
+    let written = store::write_messages(&state.pool, user_id, category_id, &batches).await?;
     session.drain();
     store::set_status(&state.pool, connector_id, "connected", None).await?;
 
     Ok(WhatsAppImportReport {
-        notes_created,
+        notes_created: written.notes_created,
         chats_imported,
         chats_skipped: selection.skipped_chats,
+        media_skipped: written.media_skipped,
     })
 }
 

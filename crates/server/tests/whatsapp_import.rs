@@ -24,8 +24,8 @@ use strands_server::auth::identity::BoxFuture;
 use strands_server::auth::{AuthError, ConsentRequest, Identity, IdentityProvider};
 use strands_server::config::AuthConfig;
 use strands_server::whatsapp::bridge::{
-    BufferedMessage, ChatSummary, Jid, LinkState, Registry, SessionFactory, WhatsAppError,
-    WhatsAppSession,
+    BufferedMessage, ChatSummary, Jid, LinkState, MediaKind, Registry, SessionFactory,
+    WhatsAppError, WhatsAppSession,
 };
 use strands_server::whatsapp::store::SessionCipher;
 
@@ -280,6 +280,14 @@ fn message(chat: &str, id: &str, body: &str, minute: u32) -> BufferedMessage {
         from_me: false,
         sender: Some("Ana".to_owned()),
         body: body.to_owned(),
+        media: None,
+    }
+}
+
+fn attachment(chat: &str, id: &str, kind: MediaKind, minute: u32) -> BufferedMessage {
+    BufferedMessage {
+        media: Some(kind),
+        ..message(chat, id, "", minute)
     }
 }
 
@@ -364,6 +372,69 @@ async fn allowlisted_chat_imports_once_and_others_never() {
     .await
     .expect("read tag of imported notes");
     assert_eq!(tag.as_deref(), Some("WhatsApp"));
+}
+
+#[tokio::test]
+async fn inbound_text_is_attributed_and_attachments_are_skipped_visibly() {
+    let Some(harness) = Harness::connect().await else {
+        return;
+    };
+    let user = harness.user().await;
+    let session = harness.open_session(&user).await;
+
+    session.push(vec![
+        message(ALLOWED, "T1", "Pick up the parcel before 6", 7),
+        attachment(ALLOWED, "T2", MediaKind::Image, 8),
+        attachment(ALLOWED, "T3", MediaKind::Document, 9),
+        // The same message again, as history sync and live delivery repeat it.
+        message(ALLOWED, "T1", "Pick up the parcel before 6", 7),
+    ]);
+    assert_eq!(
+        harness.set_allowlist(&user, &[ALLOWED]).await,
+        StatusCode::OK
+    );
+
+    let (status, report) = harness.import(&user).await;
+    assert_eq!(status, StatusCode::OK, "import failed: {report:?}");
+    assert_eq!(
+        report.notes_created, 1,
+        "the duplicate creates no second note"
+    );
+    assert_eq!(
+        report.media_skipped, 2,
+        "attachment-only messages are counted, not dropped in silence"
+    );
+    assert_eq!(note_count(&harness.pool, user.id).await, 1);
+
+    // The note belongs to the linking user, keeps the sender and the WhatsApp
+    // timestamp, and carries the message text as its body.
+    let row: (String, chrono::DateTime<Utc>, String, Option<String>) = sqlx::query_as(
+        "SELECT body, occurred_at, user_id::text, meta->>'sender' FROM notes \
+         WHERE user_id = $1 AND dedupe_key LIKE 'whatsapp:%'",
+    )
+    .bind(user.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read the imported note");
+    assert_eq!(row.0, "Pick up the parcel before 6");
+    assert_eq!(
+        row.1,
+        Utc.with_ymd_and_hms(2026, 3, 1, 9, 7, 0)
+            .single()
+            .expect("valid timestamp")
+    );
+    assert_eq!(row.2, user.id.to_string());
+    assert_eq!(row.3.as_deref(), Some("Ana"));
+
+    // A second pass over the same buffer still writes nothing new.
+    session.push(vec![
+        message(ALLOWED, "T1", "Pick up the parcel before 6", 7),
+        attachment(ALLOWED, "T2", MediaKind::Image, 8),
+    ]);
+    let (status, report) = harness.import(&user).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(report.notes_created, 0);
+    assert_eq!(note_count(&harness.pool, user.id).await, 1);
 }
 
 #[tokio::test]

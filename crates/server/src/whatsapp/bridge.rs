@@ -140,9 +140,37 @@ pub struct BufferedMessage {
     pub sent_at: DateTime<Utc>,
     pub from_me: bool,
     pub sender: Option<String>,
-    /// Empty for messages with no text (media, polls, stickers): imported as
-    /// nothing, because the ticket imports message text and nothing else.
+    /// Empty for messages with no text (media, polls, stickers). Media with a
+    /// caption keeps the caption here and is imported as text; media with no
+    /// caption is counted as skipped so it is never silently dropped.
     pub body: String,
+    /// What kind of attachment the message carried, when it carried one.
+    pub media: Option<MediaKind>,
+}
+
+/// The attachment kinds the bridge recognises. Only used to say, in the
+/// import report, what was skipped and why — attachments are not downloaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Image,
+    Video,
+    Audio,
+    Document,
+    Sticker,
+    Other,
+}
+
+impl MediaKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MediaKind::Image => "image",
+            MediaKind::Video => "video",
+            MediaKind::Audio => "audio",
+            MediaKind::Document => "document",
+            MediaKind::Sticker => "sticker",
+            MediaKind::Other => "attachment",
+        }
+    }
 }
 
 /// What one import pass may write, and what it must skip.
@@ -438,6 +466,7 @@ mod tests {
             from_me: false,
             sender: None,
             body: body.to_owned(),
+            media: None,
         }
     }
 
