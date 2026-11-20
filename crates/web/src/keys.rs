@@ -21,6 +21,8 @@ pub struct Shortcuts {
     pub search_open: Signal<bool>,
     /// The `?` map is up.
     pub help_open: Signal<bool>,
+    /// The new-strand sheet is up.
+    pub compose_open: Signal<bool>,
 }
 
 impl Shortcuts {
@@ -31,6 +33,7 @@ impl Shortcuts {
             screen_action: Signal::new(None),
             search_open: Signal::new(false),
             help_open: Signal::new(false),
+            compose_open: Signal::new(false),
         }
     }
 
@@ -99,6 +102,8 @@ fn translate(event: &KeyboardEvent, shortcuts: Shortcuts) -> Option<Action> {
         Some(Overlay::Help)
     } else if (shortcuts.search_open)() {
         Some(Overlay::Search)
+    } else if (shortcuts.compose_open)() {
+        Some(Overlay::Compose)
     } else {
         None
     };

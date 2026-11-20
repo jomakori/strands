@@ -540,26 +540,6 @@ button {
 
 /* ---------- quick capture ---------- */
 
-.capture-cta {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-left: auto;
-  min-height: 44px;
-  padding: 0 16px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--on-accent);
-  font-weight: 700;
-  font-size: 14px;
-  white-space: nowrap;
-  text-decoration: none;
-}
-
-.capture-cta:hover {
-  filter: brightness(1.06);
-}
-
 .capture-form {
   flex: 1;
   display: flex;
@@ -1994,4 +1974,122 @@ button {
 .whatsapp-danger:hover {
   border-color: var(--danger);
   color: var(--danger);
+}
+
+/* ---------- new strand: the + and its sheet (T31) ---------- */
+
+/* The grid's one create affordance: a 56px circle 24px off the right edge, lifted clear of the
+ * home indicator on a phone. `z-index: 30` is inside `.app`'s own stacking context, so it sits
+ * over the feed and its pull strip but can never rise above the search sheet or the map, which
+ * the shell renders after `.app` at 50. */
+.fab {
+  position: fixed;
+  right: 24px;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 12px 32px color-mix(in oklch, var(--bg) 72%, transparent);
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: filter 140ms var(--ease), transform 140ms var(--ease);
+}
+
+.fab:hover {
+  filter: brightness(1.06);
+}
+
+.fab:active {
+  transform: scale(0.96);
+}
+
+.fab__glyph {
+  display: block;
+}
+
+/* The last card has to stay reachable: the button floats over the grid, so the grid ends above
+ * it instead of under it. */
+.app.has-fab .feed {
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 96px);
+}
+
+.composer__heading {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+/* The fields scroll; the heading above and the two actions below do not have to. */
+.composer__form {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.composer__form .capture-label {
+  margin-top: 14px;
+}
+
+.composer__form .capture-label:first-child {
+  margin-top: 0;
+}
+
+.composer__note {
+  min-height: 104px;
+}
+
+/* A created tag is not editable any more: the retry is the note's, and saying so is the whole
+ * point of the line. */
+.composer__filed {
+  margin: 8px 0 0;
+  padding: 10px 14px;
+  border-radius: 14px;
+  border: 1px dashed color-mix(in oklch, var(--accent) 45%, transparent);
+  color: var(--accent);
+  font-size: 13px;
+}
+
+.composer__hint {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.typeahead-row.create {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.typeahead-name {
+  display: block;
+}
+
+/* Cancel and Save share the row: the sheet's primary action keeps the width, the way the
+ * capture screen's does. */
+.composer .capture-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.composer .capture-actions .button {
+  flex: 0 0 auto;
+  min-height: 48px;
+}
+
+.composer .capture-save {
+  flex: 1 1 auto;
+  width: auto;
+  min-height: 48px;
 }

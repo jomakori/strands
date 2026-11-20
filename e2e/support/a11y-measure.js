@@ -9,6 +9,9 @@
   const FOCUSABLE =
     "a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex='-1'])";
 
+  // Where a fixed-position control is compared: past every row that scrolls.
+  const FLOATING_TOP = 1e6;
+
   // ---- colour -----------------------------------------------------------------
   // Computed values arrive as oklch(), rgb()/rgba() or color(srgb ...), depending on how the
   // token was written, so all three are parsed and everything below works in sRGB.
@@ -191,12 +194,17 @@
       .map((el, index) => {
         state.index.set(el, index);
         const rect = el.getBoundingClientRect();
+        // A fixed control has no place in the scrolling flow: its rect is anchored to the
+        // viewport, not to the document, so its `top` would land wherever the visitor happens to
+        // have scrolled to. It is compared at the end of the flow instead, which is the reading
+        // position a floating action button is expected to hold — and keeps its DOM slot honest.
+        const floating = getComputedStyle(el).position === "fixed";
         return {
           index,
           path: pathOf(el),
           label: labelOf(el),
           name: nameOf(el),
-          top: Math.round(rect.top + window.scrollY),
+          top: floating ? FLOATING_TOP : Math.round(rect.top + window.scrollY),
           left: Math.round(rect.left + window.scrollX),
         };
       });

@@ -3,6 +3,7 @@
 mod account;
 mod api;
 mod capture;
+mod compose;
 mod constellation;
 mod data;
 mod detail;
