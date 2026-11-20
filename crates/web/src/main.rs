@@ -60,6 +60,11 @@ fn App() -> Element {
             Err(_) => Session::SignedOut,
         };
         session.set(resolved);
+        // The shell painted a splash while this probe was in flight (`index.html`). Its answer
+        // is the first moment the app has something of its own to show, so the layer hands the
+        // screen over here — and only here, because it lives in the document, not in a route.
+        let _ =
+            dioxus::document::eval("window.strandsSplashDone && window.strandsSplashDone();").await;
     });
 
     let current = session();
