@@ -10,7 +10,10 @@ mod source;
 mod tag;
 mod timestamp;
 
-pub use connector::{Connector, ConnectorError, ConnectorManifest, Registry};
+pub use connector::{
+    Connector, ConnectorError, ConnectorManifest, ImportItemResult, ImportOutcome, PreviewItem,
+    Registry,
+};
 pub use db::{
     ConnectorStatus, ImportRunState, JobKind, JobState, NoteKind, SummaryPreset, SummaryState,
 };

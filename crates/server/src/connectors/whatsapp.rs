@@ -22,7 +22,9 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 use strands_core::ConnectorStatus;
-use strands_core::connector::{Connector, ConnectorError, ConnectorFuture, ConnectorManifest};
+use strands_core::connector::{
+    Connector, ConnectorError, ConnectorFuture, ConnectorManifest, ImportItemResult, PreviewItem,
+};
 use uuid::Uuid;
 
 use crate::whatsapp::bridge::{LinkState, Registry as SessionRegistry};
@@ -116,10 +118,30 @@ impl Connector for WhatsAppConnector {
         ))
     }
 
-    fn sync(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Err(ConnectorError(
-            "WhatsApp imports through the row's Sync control".to_owned(),
-        ))
+    /// Pairing/importing is driven by the row's own Sync control
+    /// (`POST /api/v1/whatsapp/sync`), not the generic trait path — same
+    /// refusal `sync` used to give.
+    fn preview<'a>(
+        &'a self,
+        _user: Uuid,
+    ) -> ConnectorFuture<'a, Result<Vec<PreviewItem>, ConnectorError>> {
+        Box::pin(async {
+            Err(ConnectorError(
+                "WhatsApp imports through the row's Sync control".to_owned(),
+            ))
+        })
+    }
+
+    fn import<'a>(
+        &'a self,
+        _user: Uuid,
+        _item_keys: Vec<String>,
+    ) -> ConnectorFuture<'a, Result<Vec<ImportItemResult>, ConnectorError>> {
+        Box::pin(async {
+            Err(ConnectorError(
+                "WhatsApp imports through the row's Sync control".to_owned(),
+            ))
+        })
     }
 
     fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {

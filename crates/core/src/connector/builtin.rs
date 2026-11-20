@@ -3,7 +3,10 @@
 //! block the others" guarantee), and a placeholder for connectors not yet
 //! implemented (Gmail, Notion, Drive, Telegram — spec §7.7, T13).
 
-use super::{Connector, ConnectorError, ConnectorFuture, ConnectorManifest};
+use super::{
+    Connector, ConnectorError, ConnectorFuture, ConnectorManifest, ImportItemResult, ImportOutcome,
+    PreviewItem,
+};
 use crate::ConnectorStatus;
 use uuid::Uuid;
 
@@ -32,8 +35,27 @@ impl Connector for StubConnector {
         Ok(())
     }
 
-    fn sync(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Ok(())
+    fn preview<'a>(
+        &'a self,
+        _user: Uuid,
+    ) -> ConnectorFuture<'a, Result<Vec<PreviewItem>, ConnectorError>> {
+        Box::pin(async { Ok(Vec::new()) })
+    }
+
+    fn import<'a>(
+        &'a self,
+        _user: Uuid,
+        item_keys: Vec<String>,
+    ) -> ConnectorFuture<'a, Result<Vec<ImportItemResult>, ConnectorError>> {
+        Box::pin(async move {
+            Ok(item_keys
+                .into_iter()
+                .map(|item_key| ImportItemResult {
+                    item_key,
+                    outcome: ImportOutcome::Imported,
+                })
+                .collect())
+        })
     }
 
     fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
@@ -66,8 +88,19 @@ impl Connector for FailingConnector {
         Err(ConnectorError("upstream service is unreachable".to_owned()))
     }
 
-    fn sync(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Err(ConnectorError("upstream service is unreachable".to_owned()))
+    fn preview<'a>(
+        &'a self,
+        _user: Uuid,
+    ) -> ConnectorFuture<'a, Result<Vec<PreviewItem>, ConnectorError>> {
+        Box::pin(async { Err(ConnectorError("upstream service is unreachable".to_owned())) })
+    }
+
+    fn import<'a>(
+        &'a self,
+        _user: Uuid,
+        _item_keys: Vec<String>,
+    ) -> ConnectorFuture<'a, Result<Vec<ImportItemResult>, ConnectorError>> {
+        Box::pin(async { Err(ConnectorError("upstream service is unreachable".to_owned())) })
     }
 
     fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
@@ -109,11 +142,21 @@ impl Connector for PlaceholderConnector {
         )))
     }
 
-    fn sync(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Err(ConnectorError(format!(
-            "{} is not yet implemented",
-            self.manifest.label
-        )))
+    fn preview<'a>(
+        &'a self,
+        _user: Uuid,
+    ) -> ConnectorFuture<'a, Result<Vec<PreviewItem>, ConnectorError>> {
+        let label = self.manifest.label;
+        Box::pin(async move { Err(ConnectorError(format!("{label} is not yet implemented"))) })
+    }
+
+    fn import<'a>(
+        &'a self,
+        _user: Uuid,
+        _item_keys: Vec<String>,
+    ) -> ConnectorFuture<'a, Result<Vec<ImportItemResult>, ConnectorError>> {
+        let label = self.manifest.label;
+        Box::pin(async move { Err(ConnectorError(format!("{label} is not yet implemented"))) })
     }
 
     fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
