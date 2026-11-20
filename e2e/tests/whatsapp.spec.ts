@@ -1,6 +1,8 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Runs against the release Wasm bundle with the API stubbed at the network
 // boundary, like `settings.spec.ts`: the visual job has no database, so this file
 // owns the render path while the transport — pairing, ingest, the purge — is
@@ -125,6 +127,7 @@ test.describe("whatsapp connector row", () => {
       "last sync: 2026-11-19 18:04",
     );
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-settings-whatsapp.png`,
       fullPage: true,

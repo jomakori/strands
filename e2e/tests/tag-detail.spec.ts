@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Runs against the release Wasm bundle CI just built (see home.spec.ts). Covers T6: opening
 // a tag's detail view from the grid, the card fields, and the collapsible path stack.
 test.describe("tag detail", () => {
@@ -28,6 +30,7 @@ test.describe("tag detail", () => {
     await expect(entries.first()).toBeVisible();
     await expect(page.locator("[data-path-segments]").first()).toBeVisible();
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-tag-detail.png`,
       fullPage: true,

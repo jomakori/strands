@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Ticket T29: the true first-run state — zero tags anywhere — points at importing from a
 // connector instead of a blank capture form. This spec drives the board the way a brand-new
 // account sees it (every read answered empty, home-server.spec.ts's seeded accounts never hit
@@ -46,6 +48,7 @@ test.describe("first-run board (T29)", () => {
       expect(box?.height ?? 0, `${name} target is under 44px tall`).toBeGreaterThanOrEqual(44);
     }
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-empty.png`,
       fullPage: true,

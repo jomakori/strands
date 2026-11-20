@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 const uuid = (n: number) => `00000000-0000-4000-8000-00000000000${n}`;
 
 const PROFILE = {
@@ -112,6 +114,7 @@ test.describe("constellation", () => {
       `constellation scrolls horizontally: content is ${scrollWidth}px wide in a ${clientWidth}px viewport`,
     ).toBeLessThanOrEqual(clientWidth);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-constellation.png`,
       fullPage: true,
@@ -129,6 +132,7 @@ test.describe("constellation", () => {
     await expect(page.getByRole("button", { name: "Judge links" })).toBeVisible();
     await expect(page.locator(".constellation-node")).toHaveCount(0);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-constellation-empty.png`,
       fullPage: true,

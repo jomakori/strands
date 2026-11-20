@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Runs against the release Wasm bundle CI just built, so a green run means the
 // shipped artifacts render — not that a local dev server did.
 test.describe("home grid", () => {
@@ -21,6 +23,7 @@ test.describe("home grid", () => {
       `page scrolls horizontally: content is ${scrollWidth}px wide in a ${clientWidth}px viewport`,
     ).toBeLessThanOrEqual(clientWidth);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-home.png`,
       fullPage: true,
@@ -42,6 +45,7 @@ test.describe("home grid", () => {
     expect(visible).toBeLessThan(16);
     await expect(page.locator("#feed-count")).toContainText("tags");
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-travel-filter.png`,
       fullPage: true,
