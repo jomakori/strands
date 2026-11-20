@@ -110,11 +110,11 @@ pub fn HomeView() -> Element {
     let tags_label = data::tag_plural(counts.tags);
     let threads_label = data::thread_plural(counts.threads);
     let loaded = phase() == Phase::Ready;
-    let empty_title = if all.is_empty() {
-        "No tags yet"
-    } else {
-        "Nothing in these categories"
-    };
+    // Zero tags anywhere is a different problem than "the active chips exclude everything":
+    // the first one has nothing to capture into yet, so the fix is importing from a connector,
+    // not writing a note. The second has rows, just not under these chips, so capture still
+    // lands somewhere — this state keeps the plain `EmptyNotice` and the capture hint (T29).
+    let first_run = all.is_empty();
 
     rsx! {
         div { class: "app",
@@ -199,9 +199,18 @@ pub fn HomeView() -> Element {
                         },
                         Phase::Ready => rsx! {
                             if shown.is_empty() {
-                                EmptyNotice {
-                                    title: empty_title.to_string(),
-                                    hint: "Capture a note and it lands in a tag here.".to_string(),
+                                if first_run {
+                                    // Nothing anywhere: capture has no tag to land in yet, so
+                                    // the way forward is a connector, not a blank capture form.
+                                    FirstRunNotice {}
+                                } else {
+                                    // Tags exist; the active chips just exclude all of them.
+                                    // Capture still lands somewhere, so this stays the plain
+                                    // notice with the capture hint.
+                                    EmptyNotice {
+                                        title: "Nothing in these categories".to_string(),
+                                        hint: "Capture a note and it lands in a tag here.".to_string(),
+                                    }
                                 }
                             }
                             ul { class: "grid", id: "grid",
@@ -221,6 +230,38 @@ pub fn HomeView() -> Element {
                             "Account"
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// The true first-run state: no tags anywhere, so there is nothing to capture into yet.
+/// Points at the connectors screen first (import-first onboarding, T29) and keeps a quiet
+/// second path to capture for the reader who would rather type than import. This is a
+/// different problem than a category filter hiding everything — see the `first_run` branch
+/// in [`HomeView`] that keeps the two states apart.
+#[component]
+fn FirstRunNotice() -> Element {
+    rsx! {
+        div { class: "empty-notice first-run", "data-state": "empty",
+            p { class: "empty-title", "No strands yet" }
+            p { class: "first-run-lede",
+                "Import from the apps you already write in — Gmail, Photos, WhatsApp, Maps. \
+                 Every item you pick becomes a strand."
+            }
+            div { class: "first-run-actions",
+                Link {
+                    class: "button button-primary",
+                    "data-testid": "first-run-import",
+                    to: Route::Settings {},
+                    "Import strands"
+                }
+                Link {
+                    class: "first-run-quiet",
+                    "data-testid": "first-run-capture",
+                    to: Route::Capture {},
+                    "or capture a note"
                 }
             }
         }
