@@ -17,13 +17,18 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::Router;
+use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
-use axum::routing::get;
+use axum::routing::{get, post};
 use sqlx::PgPool;
-use strands_api_types::{ConnectorStatus as WireStatus, ConnectorSummary};
+use strands_api_types::{
+    ConnectorHistory, ConnectorHistoryRun, ConnectorImportItemResult, ConnectorImportOutcome,
+    ConnectorImportRequest, ConnectorImportResult, ConnectorPreview, ConnectorPreviewItem,
+    ConnectorStatus as WireStatus, ConnectorSummary,
+};
 use strands_core::ConnectorStatus;
 use strands_core::Registry;
-use strands_core::connector::ConnectorReport;
+use strands_core::connector::{ConnectorReport, ImportOutcome};
 
 use crate::app::AppState;
 use crate::auth::CurrentUser;
@@ -34,6 +39,9 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/connectors", get(list_connectors))
         .route("/api/v1/connectors/{id}/status", get(connector_status))
+        .route("/api/v1/connectors/{id}/preview", get(connector_preview))
+        .route("/api/v1/connectors/{id}/import", post(connector_import))
+        .route("/api/v1/connectors/{id}/history", get(connector_history))
 }
 
 /// Environment switch that adds the stub, the deliberately failing connector
@@ -138,6 +146,114 @@ pub async fn connector_status(
             .collect(),
         status,
         error,
+    }))
+}
+
+/// Everything this connector can currently see for the caller, each item
+/// flagged with whether an earlier `import` already landed it. The connector
+/// itself owns the already-imported check (it is the one holding the
+/// ledger-backed `preview` implementation), so this handler is a pure
+/// lookup-and-map: unknown id is 404, everything else is the connector's own
+/// answer.
+pub async fn connector_preview(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Json<ConnectorPreview>, AppError> {
+    let connector = state.registry.get(&id).ok_or(AppError::NotFound)?;
+    let items = connector.preview(user.id).await?;
+
+    Ok(Json(ConnectorPreview {
+        connector: id,
+        items: items
+            .into_iter()
+            .map(|item| ConnectorPreviewItem {
+                item_key: item.item_key,
+                label: item.label,
+                timestamp: item.timestamp,
+                already_imported: item.already_imported,
+            })
+            .collect(),
+    }))
+}
+
+/// Import exactly the requested item keys. An empty selection is a client
+/// mistake (nothing to do), not a vacuous success, so it is rejected with
+/// `400` before the connector is even asked.
+pub async fn connector_import(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+    payload: Result<Json<ConnectorImportRequest>, JsonRejection>,
+) -> Result<Json<ConnectorImportResult>, AppError> {
+    let connector = state.registry.get(&id).ok_or(AppError::NotFound)?;
+    let Json(request) = payload.map_err(|_| AppError::BadRequest("invalid import body".into()))?;
+    if request.item_keys.is_empty() {
+        return Err(AppError::BadRequest("item_keys must not be empty".into()));
+    }
+
+    let outcomes = connector.import(user.id, request.item_keys).await?;
+
+    let mut imported = 0usize;
+    let mut skipped = 0usize;
+    let mut failed = 0usize;
+    let results = outcomes
+        .into_iter()
+        .map(|result| {
+            let outcome = match result.outcome {
+                ImportOutcome::Imported => {
+                    imported += 1;
+                    ConnectorImportOutcome::Imported
+                }
+                ImportOutcome::SkippedAlreadyImported => {
+                    skipped += 1;
+                    ConnectorImportOutcome::SkippedAlreadyImported
+                }
+                ImportOutcome::Failed(reason) => {
+                    failed += 1;
+                    ConnectorImportOutcome::Failed { reason }
+                }
+            };
+            ConnectorImportItemResult {
+                item_key: result.item_key,
+                outcome,
+            }
+        })
+        .collect();
+
+    Ok(Json(ConnectorImportResult {
+        results,
+        imported,
+        skipped,
+        failed,
+    }))
+}
+
+/// This user's import runs for `connector`, newest first (see
+/// `ledger::history` for how a "run" is derived with no run id column).
+pub async fn connector_history(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Json<ConnectorHistory>, AppError> {
+    // Same 404 rule as the other two routes: an unknown connector id answers
+    // 404 even though this query never touches the connector itself.
+    state.registry.get(&id).ok_or(AppError::NotFound)?;
+
+    let runs = ledger::history(&state.pool, user.id, &id).await?;
+
+    Ok(Json(ConnectorHistory {
+        connector: id,
+        runs: runs
+            .into_iter()
+            .map(|run| ConnectorHistoryRun {
+                imported_at: run.imported_at,
+                imported: run.imported,
+                // See `ConnectorHistoryRun`'s doc comment: a skip never
+                // writes a ledger row, so there is nothing to count it from.
+                skipped: 0,
+            })
+            .collect(),
     }))
 }
 
