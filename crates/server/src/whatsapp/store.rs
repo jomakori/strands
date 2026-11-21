@@ -14,6 +14,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use strands_core::{Note, Source};
 use uuid::Uuid;
 
+use crate::connectors::ledger;
 use crate::error::AppError;
 use crate::ingest::TagIndex;
 use crate::whatsapp::bridge::{AllowList, ChatSummary, Jid};
@@ -412,6 +413,23 @@ pub async fn write_messages(
             if inserted.is_none() {
                 continue;
             }
+
+            // Same transaction as the note above (T33b): a crash here rolls
+            // the whole message back, never leaving a strand with no ledger
+            // row or the reverse. `dedupe_key` is already this connector's
+            // item key (it is what `notes.dedupe_key` collides on too), so
+            // the ledger agrees with the note on what "already imported"
+            // means.
+            ledger::record_import(
+                &mut tx,
+                user_id,
+                CONNECTOR_KIND,
+                &dedupe_key,
+                &ledger::source_hash(message.body.as_bytes()),
+                Some(thread_id),
+            )
+            .await?;
+
             outcome.notes_created += 1;
             newest = Some(match newest {
                 Some(previous) => previous.max(message.sent_at),

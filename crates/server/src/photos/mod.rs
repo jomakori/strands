@@ -38,6 +38,7 @@ use uuid::Uuid;
 
 use crate::app::AppState;
 use crate::auth::CurrentUser;
+use crate::connectors::ledger;
 use crate::error::AppError;
 use crate::ingest::{TagIndex, load_tag_summaries};
 use crate::secrets;
@@ -46,6 +47,14 @@ use crate::secrets;
 /// `pub(crate)` so the connector's status check reads the same row this lane
 /// writes (T27).
 pub(crate) const CONNECTOR_KIND: &str = "google_photos";
+
+/// The `connector_items.connector` value this lane writes under (T33b).
+///
+/// Deliberately the trait manifest id (`"photos"`), not [`CONNECTOR_KIND`]:
+/// slice 3's generic `preview`/`import` HTTP path will key the ledger off
+/// `Connector::manifest().id`, so writing under any other string here would
+/// make this import invisible to that future read.
+const LEDGER_CONNECTOR: &str = "photos";
 
 /// Appended to `notes.meta` so a note can be traced back to its pick.
 const IMPORT_LABEL: &str = "google_photos_picker";
@@ -417,6 +426,19 @@ async fn write_item(
     .bind(to_i32(item.width))
     .bind(to_i32(item.height))
     .execute(&mut **conn)
+    .await?;
+
+    // Same transaction as the note/thread/thumbnail above (T33b): a crash
+    // here rolls the whole pick item back, never leaving a strand with no
+    // ledger row or the reverse.
+    ledger::record_import(
+        conn,
+        user_id,
+        LEDGER_CONNECTOR,
+        &dedupe_key(item),
+        &ledger::source_hash(&thumbnail.bytes),
+        Some(thread_id),
+    )
     .await?;
 
     Ok(true)

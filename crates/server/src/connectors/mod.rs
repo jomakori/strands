@@ -6,6 +6,7 @@
 //! whose own status check fails still answers with its own row (list) or its
 //! own body (single lookup) — never a 500 that takes the rest down with it.
 
+pub mod ledger;
 mod photos;
 mod whatsapp;
 
