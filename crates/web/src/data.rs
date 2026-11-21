@@ -305,6 +305,63 @@ pub fn insert_capture(tags: &mut Vec<Tag>, capture: &Capture) {
     }
 }
 
+/// One strand the server has already accepted, ready to be placed in the grid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Strand {
+    /// The server's tag id, already created when the tag was new.
+    pub tag_id: String,
+    pub tag_name: String,
+    pub category: Category,
+    pub thread_id: String,
+    /// The title the server derived from the body.
+    pub title: String,
+}
+
+/// Place a confirmed strand at the top of the grid: the server has already written it, so there
+/// is nothing to reconcile and nothing to roll back — the row carries the real ids and the card
+/// is the one it belongs to, whether or not that tag had a card before.
+pub fn add_strand(tags: &mut Vec<Tag>, strand: &Strand) {
+    let preview = ThreadPreview {
+        id: strand.thread_id.clone(),
+        title: strand.title.clone(),
+        age_minutes: 0,
+    };
+
+    let at = tags
+        .iter()
+        .position(|tag| tag.id == strand.tag_id)
+        .or_else(|| {
+            tags.iter()
+                .position(|tag| tag.name.eq_ignore_ascii_case(&strand.tag_name))
+        });
+
+    let Some(index) = at else {
+        tags.insert(
+            0,
+            Tag {
+                id: strand.tag_id.clone(),
+                name: strand.tag_name.clone(),
+                category: strand.category,
+                thread_count: 1,
+                threads: vec![preview],
+            },
+        );
+        return;
+    };
+
+    let mut tag = tags.remove(index);
+    // A card capture left behind carries a `local-tag-` id; the server's answer replaces it.
+    tag.id = strand.tag_id.clone();
+    tag.name = strand.tag_name.clone();
+    tag.category = strand.category;
+    tag.thread_count += 1;
+    tag.threads.insert(0, preview);
+    tag.threads.truncate(PREVIEWS);
+    // Most-recently-active first is the server's own ordering, so the moved card is where a
+    // reload would put it.
+    tags.insert(0, tag);
+}
+
 /// Replace the optimistic row with the server's answer: the real thread id, the title the
 /// server derived from the body, and the tag the note actually landed in. The card the note
 /// was optimistically filed under adopts the server's tag id, so the grid keeps one card per

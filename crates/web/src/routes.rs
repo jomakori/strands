@@ -71,6 +71,7 @@ pub fn Shell() -> Element {
             Action::CloseSearch => state.search_open.set(false),
             Action::OpenHelp => state.help_open.set(true),
             Action::CloseHelp => state.help_open.set(false),
+            Action::CloseCompose => state.compose_open.set(false),
             Action::OpenCapture => {
                 navigator.push(Route::Capture {});
             }

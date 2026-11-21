@@ -19,6 +19,7 @@ use strands_api_types::{CategorySummary, TagSummary, ThreadSummary};
 use uuid::Uuid;
 
 use crate::api::{self, ApiError};
+use crate::compose::{NewStrandFab, NewStrandSheet};
 use crate::data::{self, Category, Tag};
 use crate::keys::Shortcuts;
 use crate::pull::{self, Drag, Pull};
@@ -120,8 +121,13 @@ pub fn HomeView() -> Element {
     // lands somewhere — this state keeps the plain `EmptyNotice` and the capture hint (T29).
     let first_run = all.is_empty();
 
+    // The sheet announces what it saved through this line, so the news outlives the sheet the
+    // way a toast does (T31).
+    let announce = use_signal(String::new);
+    let shortcuts = use_context::<Shortcuts>();
+
     rsx! {
-        div { class: "app",
+        div { class: "app has-fab",
             header { class: "top-row",
                 div { class: "brand",
                     img {
@@ -139,12 +145,6 @@ pub fn HomeView() -> Element {
                             }
                         }
                     }
-                }
-                Link {
-                    class: "capture-cta",
-                    to: Route::Capture {},
-                    "data-testid": "capture-open",
-                    "New note"
                 }
             }
             main { class: "feed", "aria-label": "Strands feed",
@@ -213,6 +213,20 @@ pub fn HomeView() -> Element {
                         }
                     }
                 }
+            }
+            // The one create affordance: a `+` over the feed and the sheet it opens. Both sit
+            // inside `.app` so they share its stacking context: above the feed, under the
+            // search and help layers (T31).
+            NewStrandFab {}
+            NewStrandSheet { open: shortcuts.compose_open, announce }
+            p {
+                class: "sr-only",
+                id: "new-strand-announce",
+                "data-testid": "new-strand-announce",
+                role: "status",
+                "aria-live": "polite",
+                "aria-atomic": "true",
+                "{announce()}"
             }
         }
     }

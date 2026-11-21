@@ -60,8 +60,9 @@ test.describe("quick capture", () => {
       return route.fulfill({ status: 404, body: "unexpected request" });
     });
 
-    await page.goto("/");
-    await page.locator('[data-testid="capture-open"]').click();
+    // The grid's create affordance is the `+` sheet now (T31); the capture screen is still a
+    // route, so a spec that is about that screen opens it directly.
+    await page.goto("/capture");
     await expect(page).toHaveURL(/\/capture$/);
 
     await page.locator('[data-testid="capture-body"]').fill(NOTE);

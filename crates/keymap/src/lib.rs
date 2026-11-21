@@ -32,6 +32,7 @@ impl Screen {
 pub enum Overlay {
     Search,
     Help,
+    Compose,
 }
 
 /// The keys the map names, parsed from `KeyboardEvent.key`.
@@ -124,6 +125,7 @@ pub enum Action {
     DiscardSummary,
     ToggleHistory,
     OpenSettings,
+    CloseCompose,
 }
 
 /// Where a binding applies.
@@ -135,6 +137,7 @@ pub enum Scope {
     Screen(Screen),
     Search,
     Help,
+    Compose,
 }
 
 impl Scope {
@@ -146,6 +149,7 @@ impl Scope {
             (Scope::Screen(only), None) => only == screen,
             (Scope::Search, Some(Overlay::Search)) => true,
             (Scope::Help, Some(Overlay::Help)) => true,
+            (Scope::Compose, Some(Overlay::Compose)) => true,
             _ => false,
         }
     }
@@ -263,6 +267,16 @@ pub const BINDINGS: &[Binding] = &[
         key: Some(Key::Escape),
         chord: false,
         action: Some(Action::CloseSearch),
+    },
+    Binding {
+        keys: "Esc",
+        label: "Close the new-strand sheet",
+        touch: "Tap Cancel",
+        section: Section::Capture,
+        scope: Scope::Compose,
+        key: Some(Key::Escape),
+        chord: false,
+        action: Some(Action::CloseCompose),
     },
     Binding {
         keys: "?",
@@ -521,6 +535,32 @@ mod tests {
         );
         assert_eq!(
             resolve(KeyPress::plain(Key::Escape), Screen::Home, None),
+            None
+        );
+    }
+
+    #[test]
+    fn the_compose_sheet_owns_the_keyboard_while_it_is_up() {
+        assert_eq!(
+            resolve(
+                KeyPress::plain(Key::Escape),
+                Screen::Home,
+                Some(Overlay::Compose)
+            ),
+            Some(Action::CloseCompose)
+        );
+        // The sheet is the only surface that answers: the map and search stay shut, and a
+        // plain letter typed into one of its fields is never a shortcut.
+        assert_eq!(
+            resolve(typed(Key::Question), Screen::Home, Some(Overlay::Compose)),
+            None
+        );
+        assert_eq!(
+            resolve(
+                KeyPress::plain(Key::Slash),
+                Screen::Home,
+                Some(Overlay::Compose)
+            ),
             None
         );
     }

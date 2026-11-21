@@ -145,8 +145,9 @@ test.describe("retry affordance", () => {
       });
     });
 
-    await page.goto("/");
-    await page.locator('[data-testid="capture-open"]').click();
+    // The grid's create affordance is the `+` sheet now (T31); the capture screen is still a
+    // route, so a spec that is about that screen opens it directly.
+    await page.goto("/capture");
     await expect(page.locator("#capture-body")).toBeVisible();
 
     await page.locator("#capture-body").fill("A note the server refuses");
@@ -183,8 +184,9 @@ test.describe("retry affordance", () => {
       route.fulfill({ status: 200, contentType: "application/json", body: "[]" }),
     );
 
-    await page.goto("/");
-    await page.locator('[data-testid="capture-open"]').click();
+    // The grid's create affordance is the `+` sheet now (T31); the capture screen is still a
+    // route, so a spec that is about that screen opens it directly.
+    await page.goto("/capture");
     await expect(page.locator("#capture-body")).toBeVisible();
 
     const button = await retryControl(page);
