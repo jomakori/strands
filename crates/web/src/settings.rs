@@ -112,6 +112,12 @@ fn ConnectorRow(summary: ConnectorSummary) -> Element {
             if let Some(error) = &summary.error {
                 p { class: "connector-error", "data-connector-error": "true", "{error}" }
             }
+            Link {
+                class: "button connector-import-link",
+                "data-testid": "connector-import-link",
+                to: Route::ImportWizard { id: summary.id.clone() },
+                "Import…"
+            }
         }
     }
 }

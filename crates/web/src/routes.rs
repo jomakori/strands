@@ -14,6 +14,7 @@ use crate::constellation::Constellation;
 use crate::detail::TagDetail;
 use crate::help::ShortcutMap;
 use crate::home::HomeView;
+use crate::import::ImportWizard;
 use crate::keys::{self, Shortcuts};
 use crate::pull::Pull;
 use crate::search::SearchSheet;
@@ -38,6 +39,9 @@ pub enum Route {
 
     #[route("/settings")]
     Settings {},
+
+    #[route("/connectors/:id/import")]
+    ImportWizard { id: String },
 
     #[route("/account")]
     Account {},
