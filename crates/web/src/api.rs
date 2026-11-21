@@ -14,7 +14,8 @@ use gloo_net::http::{Request, RequestBuilder};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use strands_api_types::{
-    CategorySummary, ConnectorSummary, EditSummaryRequest, GenerateSummaryRequest,
+    CategorySummary, ConnectorHistory, ConnectorImportRequest, ConnectorImportResult,
+    ConnectorPreview, ConnectorSummary, EditSummaryRequest, GenerateSummaryRequest,
     JudgeLinksResponse, LinkSummary, NewTag, NewThread, Profile, SearchResult, SummaryHistory,
     SummaryVersion, TagDetail, TagSummary, ThreadDetail, ThreadSummary, WhatsAppImportReport,
     WhatsAppStatus,
@@ -88,6 +89,28 @@ pub async fn archive_thread(id: Uuid) -> Result<(), ApiError> {
 /// `GET /api/v1/connectors` — every registered connector's settings row.
 pub async fn list_connectors() -> Result<Vec<ConnectorSummary>, ApiError> {
     get_json("/api/v1/connectors").await
+}
+
+/// `GET /api/v1/connectors/{id}/preview` — everything this connector can
+/// currently see, each item flagged with whether an earlier import already
+/// landed it (T32/T33c).
+pub async fn connector_preview(id: &str) -> Result<ConnectorPreview, ApiError> {
+    get_json(&format!("/api/v1/connectors/{id}/preview")).await
+}
+
+/// `POST /api/v1/connectors/{id}/import` — import exactly `item_keys`; the
+/// server rejects an empty selection before this ever sends it (T32).
+pub async fn connector_import(
+    id: &str,
+    item_keys: Vec<String>,
+) -> Result<ConnectorImportResult, ApiError> {
+    let body = ConnectorImportRequest { item_keys };
+    post_json(&format!("/api/v1/connectors/{id}/import"), &body).await
+}
+
+/// `GET /api/v1/connectors/{id}/history` — this user's import runs, newest first.
+pub async fn connector_history(id: &str) -> Result<ConnectorHistory, ApiError> {
+    get_json(&format!("/api/v1/connectors/{id}/history")).await
 }
 
 /// `GET /api/v1/search?q=` — the caller's threads matching `query` by title or note
