@@ -1,0 +1,11 @@
+{
+  "branches": ["main"],
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    "@semantic-release/github",
+    ["@semantic-release/exec", {
+      "publishCmd": "docker buildx build --push --platform linux/amd64,linux/arm64 --build-arg GIT_COMMIT=$GITHUB_SHA -t ghcr.io/jomakori/strands:${nextRelease.version} -t ghcr.io/jomakori/strands:latest ."
+    }]
+  ]
+}
