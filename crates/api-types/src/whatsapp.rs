@@ -31,6 +31,9 @@ pub enum WhatsAppLinkState {
     },
     /// The phone is linked and the chat list is available.
     Linked,
+    /// The bridge went down on its own (the phone unlinked this device, or the
+    /// client logged out). The row says so and offers a retry.
+    Failed { reason: String },
 }
 
 /// One chat as the phone reports it, plus whether this account allows it.
@@ -76,4 +79,8 @@ pub struct WhatsAppImportReport {
     pub chats_skipped: usize,
     /// Notes actually inserted; duplicates and redeliveries leave this at 0.
     pub notes_created: usize,
+    /// Messages that were only an attachment (no text or caption) and were
+    /// therefore not imported. Attachments are never downloaded; counting them
+    /// here keeps the skip visible instead of silent.
+    pub media_skipped: usize,
 }

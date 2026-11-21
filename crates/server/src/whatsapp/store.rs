@@ -106,6 +106,9 @@ impl SessionCipher {
 #[derive(Debug, Clone)]
 pub struct ConnectorRow {
     pub id: Uuid,
+    /// `connectors.status` as stored: the last thing this link did, which is the
+    /// only evidence left after a restart drops the in-memory session (T28).
+    pub status: String,
     pub allowlist: AllowList,
     pub last_sync_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
@@ -136,17 +139,25 @@ pub async fn connector(pool: &PgPool, user_id: Uuid) -> Result<ConnectorRow, App
     .fetch_one(pool)
     .await?;
 
-    let (config, last_sync_at, last_error) =
-        sqlx::query_as::<_, (serde_json::Value, Option<DateTime<Utc>>, Option<String>)>(
-            "SELECT config, last_sync_at, last_error FROM connectors WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_one(pool)
-        .await?;
+    let (config, last_sync_at, last_error, status) = sqlx::query_as::<
+        _,
+        (
+            serde_json::Value,
+            Option<DateTime<Utc>>,
+            Option<String>,
+            String,
+        ),
+    >(
+        "SELECT config, last_sync_at, last_error, status::text FROM connectors WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
 
     let allowlist = parse_allowlist(&config)?;
     Ok(ConnectorRow {
         id,
+        status,
         allowlist,
         last_sync_at,
         last_error,
@@ -251,6 +262,25 @@ pub async fn clear_session(pool: &PgPool, connector_id: Uuid) -> Result<(), AppE
     Ok(())
 }
 
+/// Disconnect in one transaction: the stored session material and the tokens
+/// that came with it are deleted, and the row records that it is disconnected.
+///
+/// Both happen together so a crash cannot leave a row that claims to be
+/// disconnected while its credentials are still on disk, or the reverse.
+pub async fn disconnect(pool: &PgPool, connector_id: Uuid) -> Result<(), AppError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("DELETE FROM connector_secrets WHERE connector_id = $1")
+        .bind(connector_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE connectors SET status = 'disconnected', last_error = NULL WHERE id = $1")
+        .bind(connector_id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Replace the chat snapshot taken at pairing time.
 ///
 /// Chats that are no longer on the phone are dropped, so the list the user sees
@@ -314,28 +344,42 @@ pub async fn chats(pool: &PgPool, user_id: Uuid) -> Result<Vec<StoredChat>, AppE
     Ok(chats)
 }
 
+/// What one write pass did: the notes it inserted, and the messages it
+/// deliberately left out because they carried an attachment and no text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WriteOutcome {
+    pub notes_created: usize,
+    pub media_skipped: usize,
+}
+
 /// Write one import pass inside a transaction: a thread per chat, one note per
 /// message, deduped by message id.
 ///
-/// Returns the number of notes actually inserted. Redeliveries and re-imports
-/// collide on `(user_id, dedupe_key)` and insert nothing, which is what makes a
-/// second "Sync now" safe.
+/// Redeliveries and re-imports collide on `(user_id, dedupe_key)` and insert
+/// nothing, which is what makes a second "Sync now" safe; `notes_created`
+/// counts only real insertions.
 pub async fn write_messages(
     pool: &PgPool,
     user_id: Uuid,
     category_id: Uuid,
     chats: &[(StoredChat, Vec<crate::whatsapp::bridge::BufferedMessage>)],
-) -> Result<usize, AppError> {
+) -> Result<WriteOutcome, AppError> {
     let mut tx = pool.begin().await?;
     let mut tags = TagIndex::load(&mut tx, user_id, category_id).await?;
     let tag_id = tags.resolve(&mut tx, user_id, IMPORT_TAG).await?;
 
-    let mut notes_created = 0usize;
+    let mut outcome = WriteOutcome::default();
     for (chat, messages) in chats {
         let thread_id = ensure_thread(&mut tx, user_id, tag_id, chat).await?;
         let mut newest: Option<DateTime<Utc>> = None;
         for message in messages {
             if message.body.trim().is_empty() {
+                // Attachments are not downloaded, so a message that is only an
+                // attachment imports as nothing — but it is counted, so the
+                // client can say it was skipped instead of losing it silently.
+                if message.media.is_some() {
+                    outcome.media_skipped += 1;
+                }
                 continue;
             }
             let note = Note::new(message.body.clone(), Source::WhatsApp)
@@ -368,7 +412,7 @@ pub async fn write_messages(
             if inserted.is_none() {
                 continue;
             }
-            notes_created += 1;
+            outcome.notes_created += 1;
             newest = Some(match newest {
                 Some(previous) => previous.max(message.sent_at),
                 None => message.sent_at,
@@ -395,7 +439,7 @@ pub async fn write_messages(
         .await?;
 
     tx.commit().await?;
-    Ok(notes_created)
+    Ok(outcome)
 }
 
 /// One thread per chat, reused across imports so the chat reads as a conversation.

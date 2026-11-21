@@ -16,7 +16,8 @@ use serde::de::DeserializeOwned;
 use strands_api_types::{
     CategorySummary, ConnectorSummary, EditSummaryRequest, GenerateSummaryRequest,
     JudgeLinksResponse, LinkSummary, NewTag, NewThread, Profile, SearchResult, SummaryHistory,
-    SummaryVersion, TagDetail, TagSummary, ThreadDetail, ThreadSummary,
+    SummaryVersion, TagDetail, TagSummary, ThreadDetail, ThreadSummary, WhatsAppImportReport,
+    WhatsAppStatus,
 };
 use uuid::Uuid;
 
@@ -200,6 +201,48 @@ pub const EXPORT_PATH: &str = "/api/v1/account/export";
 /// on the response header rather than inventing a second code path.
 pub const KML_PATH: &str = "/api/v1/places/kml";
 
+/// Where the live pairing QR is fetched from (T28). Rendered as an `<img>`: the
+/// route answers `image/svg+xml` with `no-store`, so a changed payload is a new
+/// URL (see [`whatsapp_qr_url`]) rather than a cached image that silently stops
+/// working.
+pub const WHATSAPP_QR_PATH: &str = "/api/v1/whatsapp/qr.svg";
+
+/// `GET /api/v1/whatsapp` — link state, the phone's chat snapshot, the
+/// allowlist and the unofficial-bridge disclosure.
+pub async fn whatsapp_status() -> Result<WhatsAppStatus, ApiError> {
+    get_json("/api/v1/whatsapp").await
+}
+
+/// `POST /api/v1/whatsapp/pair` — start a pairing attempt, or report the one
+/// already running (the QR refreshes on its own while the user scans).
+pub async fn whatsapp_pair() -> Result<WhatsAppStatus, ApiError> {
+    post_no_body("/api/v1/whatsapp/pair").await
+}
+
+/// `POST /api/v1/whatsapp/sync` — ask the phone for new messages, then import
+/// the allowlisted ones.
+pub async fn whatsapp_sync() -> Result<WhatsAppImportReport, ApiError> {
+    post_no_body("/api/v1/whatsapp/sync").await
+}
+
+/// `POST /api/v1/whatsapp/disconnect` — unlink the phone and purge the stored
+/// session.
+pub async fn whatsapp_disconnect() -> Result<WhatsAppStatus, ApiError> {
+    post_no_body("/api/v1/whatsapp/disconnect").await
+}
+
+/// The QR URL for one payload.
+///
+/// The digest keeps the URL stable for a stable payload and new for a new one:
+/// the browser then refetches exactly when the code changed, with no timer and
+/// no cache headers to trust.
+pub fn whatsapp_qr_url(payload: &str) -> String {
+    let digest = payload.bytes().fold(2_166_136_261_u32, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(16_777_619)
+    });
+    format!("{WHATSAPP_QR_PATH}?v={digest:08x}")
+}
+
 /// Shared GET-and-decode: every endpoint above is a plain GET with a JSON
 /// body, so the per-call code is just the path and the target type.
 async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
@@ -209,6 +252,12 @@ async fn get_json<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
 /// Shared POST-and-decode: send the DTO as the JSON body and decode the answer.
 async fn post_json<T: DeserializeOwned>(path: &str, body: &impl Serialize) -> Result<T, ApiError> {
     decode(Request::post(path).json(body)?.send().await?).await
+}
+
+/// Shared POST-and-decode for the routes that take no body (pair, sync,
+/// disconnect): the server reads the caller's session, nothing else.
+async fn post_no_body<T: DeserializeOwned>(path: &str) -> Result<T, ApiError> {
+    decode(Request::post(path).send().await?).await
 }
 
 /// Send one prepared request and decode its JSON body.

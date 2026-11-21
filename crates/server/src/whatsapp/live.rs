@@ -43,8 +43,8 @@ use whatsapp_rust::prelude::*;
 use whatsapp_rust::wacore::store::InMemoryBackend;
 
 use super::bridge::{
-    BufferedMessage, ChatSummary, Jid, LinkState, PairingCode, SessionFactory, WhatsAppError,
-    WhatsAppSession,
+    BufferedMessage, ChatSummary, Jid, LinkState, MediaKind, PairingCode, SessionFactory,
+    WhatsAppError, WhatsAppSession,
 };
 use crate::auth::identity::BoxFuture;
 
@@ -116,12 +116,33 @@ impl Shared {
             from_me: ctx.info.source.is_from_me,
             sender: Some(ctx.info.source.sender.to_string()),
             body: ctx.message.text_content().unwrap_or_default().to_owned(),
+            media: media_kind(ctx),
         };
         if let Ok(mut buffer) = self.buffer.lock() {
             let excess = (buffer.len() + 1).saturating_sub(BUFFER_LIMIT);
             buffer.drain(..excess);
             buffer.push(message);
         }
+    }
+}
+
+/// Classify an inbound attachment without downloading it. `text_content`
+/// covers captions, so a captioned photo still imports as text; this only
+/// names what the import report counted as skipped.
+fn media_kind(ctx: &MessageContext) -> Option<MediaKind> {
+    let message = &ctx.message;
+    if message.image_message.is_set() {
+        Some(MediaKind::Image)
+    } else if message.video_message.is_set() || message.ptv_message.is_set() {
+        Some(MediaKind::Video)
+    } else if message.audio_message.is_set() {
+        Some(MediaKind::Audio)
+    } else if message.document_message.is_set() {
+        Some(MediaKind::Document)
+    } else if message.sticker_message.is_set() {
+        Some(MediaKind::Sticker)
+    } else {
+        None
     }
 }
 
@@ -283,7 +304,14 @@ impl SessionFactory for LiveFactory {
                 })
                 .on_logged_out(move |_info| {
                     let shared = Arc::clone(&logged_out);
-                    async move { shared.mutate(LinkState::on_unlinked) }
+                    async move {
+                        shared.mutate(|state| {
+                            state.on_failed(
+                                "the phone unlinked this device or the bridge logged out: \\
+                                 press Retry pairing to link it again",
+                            )
+                        })
+                    }
                 })
                 // The only place a message is ever read, and it only copies
                 // text out of the event: no reply is ever sent from here.
@@ -329,6 +357,7 @@ mod tests {
             from_me: false,
             sender: None,
             body: "x".into(),
+            media: None,
         }
     }
 

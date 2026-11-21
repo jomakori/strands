@@ -75,7 +75,27 @@ async fn main() {
             strands_server::connectors::DEV_CONNECTORS_ENV
         );
     }
-    let registry = build_registry(pool.clone(), secrets.clone(), dev_connectors);
+
+    // The WhatsApp transport links a phone inside this process, so it is built
+    // once here: the settings row and every `/api/v1/whatsapp` route share the
+    // same session registry, and a deploy without a connector key gets none at
+    // all (the row then reports the missing key instead of offering a dead link).
+    let whatsapp_cipher = SessionCipher::from_env().ok();
+    let whatsapp_sessions = whatsapp_cipher
+        .as_ref()
+        .map(|_| Arc::new(WhatsAppRegistry::new(Arc::new(LiveFactory::from_env()))));
+    if whatsapp_cipher.is_none() {
+        eprintln!(
+            "strands: STRANDS_SECRET_KEY is unset or not 32 base64 bytes; \
+             the WhatsApp link stays unconfigured"
+        );
+    }
+    let registry = build_registry(
+        pool.clone(),
+        secrets.clone(),
+        whatsapp_sessions.clone(),
+        dev_connectors,
+    );
 
     // Same fail-at-boot rule as the identity provider: a missing LiteLLM
     // config should never pass health checks and fail only on first use.
@@ -123,22 +143,11 @@ async fn main() {
         None => state,
     };
 
-    // WhatsApp is optional in the same way, but for a different reason: the
-    // transport (whatsapp-rust) links a phone, so a deploy with no connector key
-    // must not offer a link that can never be turned on. Without the key the
-    // router keeps `UnconfiguredFactory`, and every endpoint says so plainly.
-    let state = match SessionCipher::from_env() {
-        Ok(cipher) => state.with_whatsapp(
-            Arc::new(WhatsAppRegistry::new(Arc::new(LiveFactory::from_env()))),
-            Arc::new(cipher),
-        ),
-        Err(_) => {
-            eprintln!(
-                "strands: STRANDS_SECRET_KEY is unset or not 32 base64 bytes; \
-                 the WhatsApp link stays unconfigured"
-            );
-            state
-        }
+    // WhatsApp rides on the same key: without it there is no cipher, hence no
+    // stored session, hence no link — the row already said so at boot.
+    let state = match (whatsapp_sessions, whatsapp_cipher) {
+        (Some(sessions), Some(cipher)) => state.with_whatsapp(sessions, Arc::new(cipher)),
+        _ => state,
     };
 
     // The browser is served by this process (spec §6, one deployable): the

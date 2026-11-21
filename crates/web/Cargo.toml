@@ -9,6 +9,9 @@ chrono = { version = "0.4", default-features = false, features = ["std"] }
 dioxus = { version = "0.7", features = ["web", "router"] }
 futures = "0.3"
 gloo-net = "0.6"
+# The WhatsApp row polls the link status while it is mounted (T28); this is the
+# sleeping half of that loop, already in the lock file via dioxus' own graph.
+gloo-timers = { version = "0.3", features = ["futures"] }
 js-sys = "0.3"
 serde = { version = "1", features = ["derive"] }
 strands-api-types = { path = "../api-types" }

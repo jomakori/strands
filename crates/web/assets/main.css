@@ -1754,3 +1754,188 @@ button {
 .gate-probing .gate-title {
   opacity: 0.4;
 }
+
+/* ---------------------------------------------------------------------------
+ * Connector settings rows (T13 markup, styled in T28).
+ *
+ * The row is the unit a failing connector must not escape: a long error wraps
+ * inside its own card, and the status chip keeps its width so a neighbour's
+ * long label cannot push it off the screen at 360px.
+ * ------------------------------------------------------------------------- */
+
+.connector-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.connector-row {
+  display: grid;
+  gap: 10px;
+  padding: 16px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.connector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.connector-label {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.status-chip {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.status-chip[data-status="connected"] {
+  border-color: color-mix(in oklch, var(--reading) 55%, transparent);
+  background: color-mix(in oklch, var(--reading) 16%, transparent);
+  color: var(--reading);
+}
+
+.status-chip[data-status="needs-sign-in"] {
+  border-color: color-mix(in oklch, var(--accent) 50%, transparent);
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  color: var(--accent);
+}
+
+.status-chip[data-status="error"] {
+  border-color: color-mix(in oklch, var(--danger) 55%, transparent);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  color: var(--danger);
+}
+
+.connector-scopes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.connector-scope {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.connector-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------------------
+ * The WhatsApp row (T28): the disclosure, the pairing QR and its actions.
+ * ------------------------------------------------------------------------- */
+
+.whatsapp-disclosure {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--accent);
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.whatsapp-pair {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+
+.whatsapp-qr {
+  /* A QR must stay on white, whatever the theme: an inverted code does not scan
+     on every phone. The radius is the panel's, the padding is the quiet zone
+     the encoder already left plus a hair of margin. */
+  width: 220px;
+  max-width: 100%;
+  height: auto;
+  padding: 6px;
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+.whatsapp-hint,
+.whatsapp-meta,
+.whatsapp-notice {
+  margin: 0;
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
+
+.whatsapp-pair-code {
+  margin: 0;
+  font-size: 13px;
+}
+
+.whatsapp-pair-code strong {
+  font-family: var(--font-display);
+  font-size: 15px;
+  letter-spacing: 0.12em;
+}
+
+.whatsapp-muted {
+  color: var(--muted);
+}
+
+.whatsapp-notice {
+  color: var(--reading);
+}
+
+.whatsapp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.whatsapp-action {
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: background 160ms var(--ease), border-color 160ms var(--ease);
+}
+
+.whatsapp-action:hover {
+  border-color: var(--accent);
+}
+
+.whatsapp-action:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.whatsapp-danger:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}

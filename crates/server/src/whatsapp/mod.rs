@@ -7,9 +7,12 @@
 
 pub mod bridge;
 pub mod live;
+pub mod qr;
 pub mod store;
 
 use axum::extract::State;
+use axum::http::header;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use strands_api_types::{
@@ -29,6 +32,7 @@ use store::{SessionCipher, StoredChat};
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/whatsapp", get(status))
+        .route("/api/v1/whatsapp/qr.svg", get(qr_image))
         .route("/api/v1/whatsapp/pair", post(pair))
         .route("/api/v1/whatsapp/allowlist", put(set_allowlist))
         .route("/api/v1/whatsapp/import", post(import))
@@ -43,6 +47,36 @@ async fn status(
     Ok(Json(build_status(&state, user.id).await?))
 }
 
+/// The live pairing payload as an SVG the phone can scan.
+///
+/// Served as its own response rather than a field on [`WhatsAppStatus`]: the QR
+/// changes every time the bridge refreshes it, and an `<img>` that only reloads
+/// when the payload changes keeps the status poll cheap.
+async fn qr_image(State(state): State<AppState>, user: CurrentUser) -> Result<Response, AppError> {
+    let payload = state
+        .whatsapp
+        .session(user.id)
+        .and_then(|session| match session.state() {
+            LinkState::AwaitingScan { qr: Some(code), .. } => Some(code.value),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            AppError::BadRequest("no pairing code is live: press Connect to start one".to_owned())
+        })?;
+    let svg = qr::svg(&payload).ok_or_else(|| {
+        AppError::Unavailable("the pairing code did not encode as a QR".to_owned())
+    })?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "image/svg+xml"),
+            // A stale QR is worse than none: it silently stops working.
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        svg,
+    )
+        .into_response())
+}
+
 /// Start pairing, or report the one already running.
 async fn pair(
     State(state): State<AppState>,
@@ -51,6 +85,20 @@ async fn pair(
     let cipher = cipher(&state)?;
     let row = store::connector(&state.pool, user.id).await?;
 
+    // A session the bridge reports as dead is not a pairing in progress: drop it
+    // and start a fresh one, which is what makes Retry pairing work.
+    if let Some(session) = state.whatsapp.session(user.id)
+        && session.state().is_dead()
+    {
+        state.whatsapp.forget(user.id);
+    }
+    // A session the bridge reports as dead is not a pairing in progress: drop it
+    // and start a fresh one, which is what makes Retry pairing work.
+    if let Some(session) = state.whatsapp.session(user.id)
+        && session.state().is_dead()
+    {
+        state.whatsapp.forget(user.id);
+    }
     if state.whatsapp.session(user.id).is_none() {
         // A parked session means the phone is still linked: reopen it instead of
         // asking the user to scan again.
@@ -117,8 +165,7 @@ async fn disconnect(
         session.unlink().await?;
         state.whatsapp.forget(user.id);
     }
-    store::clear_session(&state.pool, row.id).await?;
-    store::set_status(&state.pool, row.id, "disconnected", None).await?;
+    store::disconnect(&state.pool, row.id).await?;
     Ok(Json(build_status(&state, user.id).await?))
 }
 
@@ -137,6 +184,7 @@ async fn drain_into_notes(
             notes_created: 0,
             chats_imported: 0,
             chats_skipped: selection.skipped_chats,
+            media_skipped: 0,
         });
     }
 
@@ -161,14 +209,15 @@ async fn drain_into_notes(
         .collect();
     let chats_imported = batches.len();
 
-    let notes_created = store::write_messages(&state.pool, user_id, category_id, &batches).await?;
+    let written = store::write_messages(&state.pool, user_id, category_id, &batches).await?;
     session.drain();
     store::set_status(&state.pool, connector_id, "connected", None).await?;
 
     Ok(WhatsAppImportReport {
-        notes_created,
+        notes_created: written.notes_created,
         chats_imported,
         chats_skipped: selection.skipped_chats,
+        media_skipped: written.media_skipped,
     })
 }
 
@@ -224,13 +273,41 @@ async fn build_status(state: &AppState, user_id: Uuid) -> Result<WhatsAppStatus,
             .collect()
     };
 
+    let mut last_error = row.last_error.clone();
+    // A stored "connected" with no live session means the process that held the
+    // device link is gone: a restart drops the in-memory transport, and the
+    // phone is still linked upstream. Repair the row once and tell the user what
+    // to do, rather than showing a green link that can never receive anything.
+    if session.is_none() && row.status == "connected" {
+        let message = "the WhatsApp bridge is not holding a session (a restart drops the \
+                       device link): press Connect and scan again";
+        store::set_status(&state.pool, row.id, "needs_sign_in", Some(message)).await?;
+        last_error = Some(message.to_owned());
+    }
+
+    // A live, healthy link is the truth: record it, so a row that had been
+    // marked failed recovers as soon as the retry succeeds.
+    if state_snapshot.is_linked() && row.status != "connected" {
+        store::set_status(&state.pool, row.id, "connected", None).await?;
+        last_error = None;
+    }
+
+    // A live session that died on its own is a failure, not a user action: the
+    // row has to say so, and only the bridge is affected.
+    if let LinkState::Failed { reason } = &state_snapshot {
+        if row.status != "error" || row.last_error.as_deref() != Some(reason.as_str()) {
+            store::set_status(&state.pool, row.id, "error", Some(reason)).await?;
+        }
+        last_error = Some(reason.clone());
+    }
+
     Ok(WhatsAppStatus {
         state: link_state(state_snapshot),
         disclosure: WHATSAPP_DISCLOSURE.to_owned(),
         allowlist: row.allowlist.jids().iter().map(Jid::to_string).collect(),
         chats,
         last_sync_at: row.last_sync_at,
-        last_error: row.last_error,
+        last_error,
     })
 }
 
@@ -245,6 +322,7 @@ fn link_state(state: LinkState) -> WhatsAppLinkState {
             pair_code: pair_code.map(|code| code.value),
         },
         LinkState::Linked => WhatsAppLinkState::Linked,
+        LinkState::Failed { reason } => WhatsAppLinkState::Failed { reason },
     }
 }
 
