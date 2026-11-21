@@ -1615,3 +1615,74 @@ button {
 .capture-error .load-error-text {
   color: var(--danger);
 }
+
+/* ---------- sign-in gate (T24) ---------- *
+ * The whole app is behind this screen, so it is the first thing a new visitor sees and the
+ * only thing 360px has to fit: one column, one control at a comfortable touch size, and the
+ * same centred card at 1440px — no separate desktop composition to keep in sync.
+ */
+
+.gate {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-height: 100dvh;
+  padding: 32px 20px calc(32px + env(safe-area-inset-bottom, 0px));
+}
+
+.gate-card {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  max-width: 380px;
+  justify-items: center;
+  text-align: center;
+}
+
+.gate-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  color: var(--fg);
+}
+
+.gate-line {
+  margin: 0 0 22px;
+  font-size: 15px;
+  color: var(--muted);
+}
+
+.gate-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 22px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  touch-action: manipulation;
+  transition: background 160ms var(--ease), transform 160ms var(--ease);
+}
+
+.gate-cta:hover {
+  background: color-mix(in oklch, var(--accent) 88%, white);
+}
+
+.gate-cta:active {
+  transform: translateY(1px);
+}
+
+/* The probe's own frame: the wordmark, dimmed, and nothing to press. */
+.gate-probing .gate-title {
+  opacity: 0.4;
+}

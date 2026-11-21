@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { PROFILE } from "../support/session";
+
 // Runs against the release Wasm bundle CI just built. The API is stubbed at the network
 // boundary: the visual job serves the bundle statically, with no database behind it, so the
 // browser test owns the render path (capture → optimistic row → reconciled row) while the
@@ -23,6 +25,10 @@ test.describe("quick capture", () => {
           body: JSON.stringify(body),
         });
 
+      if (path.endsWith("/me")) {
+        // The session probe the gate makes before anything else renders (T24).
+        return json(PROFILE);
+      }
       if (path.endsWith("/categories")) {
         return json([
           { id: CATEGORY_ID, name: "Travel", color: "#6aa9ff", position: 0 },
