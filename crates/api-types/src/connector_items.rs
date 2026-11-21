@@ -45,10 +45,12 @@ pub enum ConnectorImportOutcome {
     Failed { reason: String },
 }
 
-/// One requested key's outcome, in request order.
+/// One requested key's outcome, in request order. The outcome self-tags under
+/// the same field name the outer struct stores it under (`outcome`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConnectorImportItemResult {
     pub item_key: String,
+    #[serde(flatten)]
     pub outcome: ConnectorImportOutcome,
 }
 
