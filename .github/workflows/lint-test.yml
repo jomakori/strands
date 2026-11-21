@@ -257,7 +257,20 @@ jobs:
         run: npm ci --prefix e2e --no-audit --no-fund
 
       - name: Install Chromium for Playwright
-        run: npx --prefix e2e playwright install --with-deps chromium
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          # The runner's Ubuntu mirror flakes often enough to fail whole runs on a font package.
+          # The browser is what the capture needs, so system deps get three attempts and, if the
+          # mirror stays unreachable, the browser alone goes in — glyph substitution is a smaller
+          # loss than a red check that says nothing about the UI.
+          for attempt in 1 2 3; do
+            npx --prefix e2e playwright install --with-deps chromium && exit 0
+            echo "system deps attempt $attempt failed; retrying in 20s"
+            sleep 20
+          done
+          echo "::warning::system deps unavailable, installing Chromium without them"
+          npx --prefix e2e playwright install chromium
 
       - name: Serve the bundle on a local port
         env:
