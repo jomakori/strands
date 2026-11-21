@@ -557,12 +557,17 @@ async fn a_pick_with_nothing_in_it_leaves_the_account_clean() {
         0
     );
     // Closed, not left pending: the session cannot be imported later.
-    let state: String =
-        sqlx::query_scalar("SELECT state FROM photo_picker_sessions WHERE session_id = $1")
-            .bind(&session_id)
-            .fetch_one(&harness.pool)
-            .await
-            .expect("read session state");
+    // Scoped by user like every production query: two harnesses in this binary
+    // can mint the same fake session id for different users, and an unscoped
+    // read would sometimes return the other test's still-pending row.
+    let state: String = sqlx::query_scalar(
+        "SELECT state FROM photo_picker_sessions WHERE session_id = $1 AND user_id = $2",
+    )
+    .bind(&session_id)
+    .bind(user.id)
+    .fetch_one(&harness.pool)
+    .await
+    .expect("read session state");
     assert_eq!(state, "imported", "an empty pick is finished, not pending");
 }
 
@@ -629,4 +634,66 @@ async fn a_user_without_a_connected_connector_is_told_so() {
             .contains("not connected"),
         "the message must say what is missing: {body}"
     );
+}
+
+/// The same selection picked twice files the items once (T27 acceptance).
+///
+/// Google hands out a fresh session per pick, so "twice" is two sessions over
+/// the same media item ids — the dedupe key, not the session, is what makes the
+/// second run a skip. And the notes are the *picker's* notes: a second user
+/// picking the same photos gets their own copy, because dedupe is per user.
+#[tokio::test]
+async fn picking_the_same_selection_twice_imports_it_once() {
+    let Some(harness) = Harness::connect(three_picks()).await else {
+        return;
+    };
+    let alice = harness.user("alice-twice").await;
+    harness.connect_photos(&alice).await;
+
+    let first = harness.start_pick(&alice).await;
+    let (status, body) = harness.poll(&alice, &first).await;
+    assert_eq!(status, StatusCode::OK, "first pick: {body}");
+    assert_eq!(body["state"], "imported");
+    assert_eq!(body["notes_created"], 3);
+    assert_eq!(body["notes_skipped"], 0);
+
+    // A second session, the same three items.
+    let second = harness.start_pick(&alice).await;
+    let (status, body) = harness.poll(&alice, &second).await;
+    assert_eq!(status, StatusCode::OK, "second pick: {body}");
+    assert_eq!(body["state"], "imported");
+    assert_eq!(body["notes_created"], 0, "nothing new: {body}");
+    assert_eq!(body["notes_skipped"], 3, "all three already filed: {body}");
+
+    assert_eq!(harness.note_ids(&alice).await.len(), 3, "still three notes");
+
+    // Attribution: the notes are hers, and a different account picking the same
+    // photos gets its own three rather than sharing or stealing them.
+    let bob = harness.user("bob-twice").await;
+    harness.connect_photos(&bob).await;
+    let bobs_pick = harness.start_pick(&bob).await;
+    let (status, body) = harness.poll(&bob, &bobs_pick).await;
+    assert_eq!(status, StatusCode::OK, "bob's pick: {body}");
+    assert_eq!(body["notes_created"], 3, "his own copy: {body}");
+
+    let alice_notes = harness.note_ids(&alice).await;
+    let bob_notes = harness.note_ids(&bob).await;
+    assert_eq!(alice_notes.len(), 3);
+    assert_eq!(bob_notes.len(), 3);
+    assert!(
+        alice_notes
+            .iter()
+            .all(|(id, _)| !bob_notes.iter().any(|(other, _)| other == id)),
+        "no note is shared between accounts"
+    );
+
+    let owners: Vec<(Uuid, i64)> = sqlx::query_as(
+        "SELECT user_id, count(*) FROM notes WHERE user_id = ANY($1) GROUP BY user_id",
+    )
+    .bind(vec![alice.id, bob.id])
+    .fetch_all(&harness.pool)
+    .await
+    .expect("count notes per owner");
+    assert_eq!(owners.len(), 2, "both accounts own rows: {owners:?}");
+    assert!(owners.iter().all(|(_, count)| *count == 3), "{owners:?}");
 }

@@ -6,6 +6,8 @@
 
 use std::collections::BTreeMap;
 
+use uuid::Uuid;
+
 use super::{Connector, ConnectorManifest};
 use crate::ConnectorStatus;
 
@@ -44,25 +46,42 @@ impl Registry {
         self.connectors.get(id).map(|boxed| boxed.as_ref())
     }
 
-    /// One report per registered connector, in id order. A connector whose
-    /// `status()` fails still gets a row — with its own error — instead of
-    /// aborting the whole list.
-    pub fn reports(&self) -> Vec<ConnectorReport> {
-        self.connectors
-            .values()
-            .map(|connector| match connector.status() {
+    /// Registered ids in the registry's stable order. Lets a test assert on the
+    /// exact set a build registers instead of probing ids one at a time.
+    pub fn ids(&self) -> Vec<&'static str> {
+        self.connectors.keys().copied().collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.connectors.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.connectors.is_empty()
+    }
+
+    /// One report per registered connector for `user`, in id order. A connector
+    /// whose `status()` fails still gets a row — with its own error — instead of
+    /// aborting the whole list. Queried sequentially on purpose: the row count is
+    /// small, and a join would need every connector's future to be `Unpin`.
+    pub async fn reports(&self, user: Uuid) -> Vec<ConnectorReport> {
+        let mut reports = Vec::with_capacity(self.connectors.len());
+        for connector in self.connectors.values() {
+            let manifest = connector.manifest();
+            reports.push(match connector.status(user).await {
                 Ok(status) => ConnectorReport {
-                    manifest: connector.manifest(),
+                    manifest,
                     status: Some(status),
                     error: None,
                 },
                 Err(error) => ConnectorReport {
-                    manifest: connector.manifest(),
+                    manifest,
                     status: None,
                     error: Some(error.0),
                 },
-            })
-            .collect()
+            });
+        }
+        reports
     }
 }
 
@@ -71,13 +90,17 @@ mod tests {
     use super::*;
     use crate::connector::{FailingConnector, StubConnector};
 
-    #[test]
-    fn a_failing_connector_does_not_block_the_others() {
+    fn user() -> Uuid {
+        Uuid::nil()
+    }
+
+    #[tokio::test]
+    async fn a_failing_connector_does_not_block_the_others() {
         let mut registry = Registry::new();
         registry.register(StubConnector);
         registry.register(FailingConnector);
 
-        let reports = registry.reports();
+        let reports = registry.reports(user()).await;
         assert_eq!(reports.len(), 2, "both connectors get a row");
 
         let stub = reports
@@ -95,13 +118,18 @@ mod tests {
         assert!(failing.error.is_some(), "its own error, not a panic");
     }
 
-    #[test]
-    fn reports_are_in_stable_id_order() {
+    #[tokio::test]
+    async fn reports_are_in_stable_id_order() {
         let mut registry = Registry::new();
         registry.register(FailingConnector);
         registry.register(StubConnector);
 
-        let ids: Vec<&str> = registry.reports().iter().map(|r| r.manifest.id).collect();
+        let ids: Vec<&str> = registry
+            .reports(user())
+            .await
+            .iter()
+            .map(|r| r.manifest.id)
+            .collect();
         assert_eq!(ids, vec!["failing", "stub"]);
     }
 

@@ -24,7 +24,9 @@ use strands_server::app::{AppState, router};
 use strands_server::auth::identity::BoxFuture as IdentityFuture;
 use strands_server::auth::{AuthError, ConsentRequest, Identity, IdentityProvider};
 use strands_server::config::AuthConfig;
-use strands_server::gmaps::places::{PlaceError, PlaceQuery, PlaceResolver, ResolvedPlace};
+use strands_server::gmaps::places::{
+    PlaceError, PlaceQuery, PlaceResolver, PlacesApiResolver, ResolvedPlace,
+};
 use strands_server::llm::BoxFuture;
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -105,7 +107,8 @@ impl IdentityProvider for UnusedIdentity {
 struct Harness {
     pool: PgPool,
     app: Router,
-    geocoder: Arc<FakeGeocoder>,
+    /// `None` for the runs that stand in for a deploy with no Maps key.
+    geocoder: Option<Arc<FakeGeocoder>>,
 }
 
 struct TestUser {
@@ -115,9 +118,29 @@ struct TestUser {
 
 impl Harness {
     async fn connect() -> Option<Self> {
-        let pool = common::connect("gmaps_ingest").await?;
         let geocoder = Arc::new(FakeGeocoder::new());
-        let state = AppState::new(
+        Self::with_resolver(Some(geocoder.clone()), Some(geocoder)).await
+    }
+
+    /// A server shaped like a deploy with no `GOOGLE_MAPS_API_KEY`: `AppState`
+    /// keeps its default [`UnconfiguredResolver`] because `main.rs` only calls
+    /// `with_geocoder` when `PlacesApiResolver::from_env()` returns `Some`.
+    async fn connect_without_maps_key() -> Option<Self> {
+        Self::with_resolver(None, None).await
+    }
+
+    /// A server whose geocoder is the real `PlacesApiResolver`, pointed at a
+    /// stand-in endpoint instead of Google.
+    async fn connect_with_resolver(resolver: Arc<dyn PlaceResolver>) -> Option<Self> {
+        Self::with_resolver(Some(resolver), None).await
+    }
+
+    async fn with_resolver(
+        resolver: Option<Arc<dyn PlaceResolver>>,
+        recorded: Option<Arc<FakeGeocoder>>,
+    ) -> Option<Self> {
+        let pool = common::connect("gmaps_ingest").await?;
+        let mut state = AppState::new(
             pool.clone(),
             AuthConfig {
                 client_id: "unused-client-id".into(),
@@ -131,12 +154,14 @@ impl Harness {
             Arc::new(strands_server::summary::LiteLlmSummarizer::new(
                 strands_server::llm::LiteLlmClient::new("http://unused.invalid", "unused"),
             )),
-        )
-        .with_geocoder(geocoder.clone());
+        );
+        if let Some(resolver) = resolver {
+            state = state.with_geocoder(resolver);
+        }
         Some(Self {
             pool,
             app: router(state),
-            geocoder,
+            geocoder: recorded,
         })
     }
 
@@ -412,7 +437,7 @@ async fn twelve_saved_places_become_a_list_with_four_honestly_unresolved() {
     assert_eq!(first.places_created, 12);
     assert_eq!(first.places_unresolved, 4);
     assert_eq!(
-        harness.geocoder.calls(),
+        harness.geocoder.as_ref().expect("fake geocoder").calls(),
         8,
         "only rows with an address are looked up"
     );
@@ -593,4 +618,175 @@ async fn an_unrecognised_upload_is_a_bad_request() {
         0,
         "a refused upload writes nothing"
     );
+}
+
+/// A stand-in for `places.googleapis.com/v1/places:searchText`: every text
+/// search finds the same cafe, over a real socket so the resolver's own
+/// request building and response parsing run. Only Google is faked.
+async fn stub_places_api() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind places stub");
+    let addr = listener.local_addr().expect("stub address");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut scratch = vec![0u8; 4096];
+                let _ = socket.read(&mut scratch).await;
+                let body = r#"{"places":[{
+                    "id":"stub-cafe",
+                    "displayName":{"text":"Stub Cafe"},
+                    "formattedAddress":"1 Stub St, San Francisco, CA 94110",
+                    "location":{"latitude":37.7599,"longitude":-122.4148},
+                    "primaryType":"cafe",
+                    "types":["cafe","food"],
+                    "addressComponents":[
+                        {"longText":"San Francisco","types":["locality"]},
+                        {"longText":"California","types":["administrative_area_level_1"]},
+                        {"longText":"United States","types":["country"]}
+                    ]}]}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+                let _ = socket.shutdown().await;
+            });
+        }
+    });
+    format!("http://{addr}/v1/places:searchText")
+}
+
+/// The deployment that logged "no Google Maps API key configured" on first
+/// boot: the import still succeeds, keeps every row, and says plainly that
+/// nothing was geocoded — no invented coordinates, no failed upload.
+#[tokio::test]
+async fn without_a_maps_key_the_import_succeeds_and_reports_every_row_ungeocoded() {
+    let Some(harness) = Harness::connect_without_maps_key().await else {
+        return;
+    };
+    let user = harness.user().await;
+
+    let (status, result) = harness
+        .upload(&user, "Saved Places.csv", &saved_places_csv())
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{result:?}");
+    assert_eq!(result.places_seen, 12);
+    assert_eq!(result.places_created, 12, "a missing key loses no rows");
+    assert_eq!(
+        result.places_unresolved, 12,
+        "every row is reported ungeocoded, not silently dropped"
+    );
+
+    let geocoded = harness
+        .count(
+            &user,
+            "SELECT count(*) FROM places WHERE user_id = $1 \
+             AND (lat IS NOT NULL OR lng IS NOT NULL)",
+        )
+        .await;
+    assert_eq!(geocoded, 0, "no coordinates were invented");
+
+    let marked = harness
+        .count(
+            &user,
+            "SELECT count(*) FROM places WHERE user_id = $1 AND enrichment = 'unresolved'",
+        )
+        .await;
+    assert_eq!(marked, 12, "the rows say so themselves");
+
+    // The KML export is where the UI reads the count it shows the user.
+    let request = Request::builder()
+        .uri("/api/v1/places/kml")
+        .header(header::COOKIE, &user.cookie)
+        .body(Body::empty())
+        .expect("build kml request");
+    let response = harness
+        .app
+        .clone()
+        .oneshot(request)
+        .await
+        .expect("kml response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let reported = response
+        .headers()
+        .get("x-strands-unresolved-places")
+        .expect("the export reports the ungeocoded count")
+        .to_str()
+        .expect("header is ascii")
+        .to_owned();
+    assert_eq!(reported, "12");
+}
+
+/// With `GOOGLE_MAPS_API_KEY` set, `main.rs` swaps in the real
+/// `PlacesApiResolver`; a place import then lands with the provider's
+/// coordinates while the blank-address rows stay honestly unresolved.
+#[tokio::test]
+async fn a_maps_key_resolves_a_place_import_to_coordinates() {
+    let endpoint = stub_places_api().await;
+    // Not a credential: this value only ever travels to the socket above, and
+    // the real Doppler key is never available to a test run.
+    let resolver = Arc::new(PlacesApiResolver::new(
+        "stand-in-endpoint-not-a-credential".into(),
+        endpoint,
+    ));
+    let Some(harness) = Harness::connect_with_resolver(resolver).await else {
+        return;
+    };
+    let user = harness.user().await;
+
+    let (status, result) = harness
+        .upload(&user, "Saved Places.csv", &saved_places_csv())
+        .await;
+
+    assert_eq!(status, StatusCode::OK, "{result:?}");
+    assert_eq!(result.places_seen, 12);
+    // All eight addressed rows come back as the same stub place, so the store
+    // keeps one row for them plus the four distinct blank-address rows.
+    assert_eq!(
+        result.places_created, 5,
+        "identical provider hits collapse onto one place"
+    );
+    assert_eq!(
+        result.places_unresolved, 4,
+        "only the four blank addresses stay ungeocoded"
+    );
+
+    let resolved: Vec<(f64, f64, String)> = sqlx::query_as(
+        "SELECT lat, lng, enrichment::text FROM places \
+          WHERE user_id = $1 AND enrichment = 'resolved'",
+    )
+    .bind(user.id)
+    .fetch_all(&harness.pool)
+    .await
+    .expect("read resolved places");
+    assert_eq!(resolved.len(), 1, "the provider's place is stored once");
+    let (lat, lng, enrichment) = &resolved[0];
+    assert_eq!(*enrichment, "resolved");
+    assert!(
+        (*lat - 37.7599).abs() < 1e-9 && (*lng + 122.4148).abs() < 1e-9,
+        "the row carries the provider's coordinates, got {lat},{lng}"
+    );
+
+    let lists: Vec<PlaceListSummary> = harness.get_json(&user, "/api/v1/lists").await;
+    assert_eq!(
+        lists[0].place_count, 5,
+        "the eight addressed rows fold onto the one place the provider returned"
+    );
+
+    let unresolved = harness
+        .count(
+            &user,
+            "SELECT count(*) FROM places WHERE user_id = $1 AND enrichment = 'unresolved'",
+        )
+        .await;
+    assert_eq!(unresolved, 4, "the rest are still marked, not dropped");
 }

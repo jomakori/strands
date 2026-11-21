@@ -43,7 +43,9 @@ use crate::ingest::{TagIndex, load_tag_summaries};
 use crate::secrets;
 
 /// `connectors.kind` for this lane; also the `source` label stored in meta.
-const CONNECTOR_KIND: &str = "google_photos";
+/// `pub(crate)` so the connector's status check reads the same row this lane
+/// writes (T27).
+pub(crate) const CONNECTOR_KIND: &str = "google_photos";
 
 /// Appended to `notes.meta` so a note can be traced back to its pick.
 const IMPORT_LABEL: &str = "google_photos_picker";
