@@ -36,14 +36,18 @@ test.describe("home grid reads the server", () => {
 
   test("an empty answer is an empty grid, not a sample one", async ({ browser }) => {
     // The empty case is driven by holding the tag read open until it answers nothing: the app
-    // must render "no tags", which a compiled-in sample grid made impossible.
+    // must render the first-run notice, which a compiled-in sample grid made impossible. The
+    // copy is T29's import-first one — zero tags anywhere is the new-account state, so the way
+    // out is a connector, not a blank capture form (first-run.spec.ts owns that wording).
     const context = await browser.newContext({ storageState: signedInAs(SECOND_SESSION_ID) });
     const page = await context.newPage();
     await page.route("**/api/v1/tags", (route) => route.fulfill({ json: [] }));
     await page.goto("/");
 
     await expect(page.locator("#grid [data-tag-id]")).toHaveCount(0);
-    await expect(page.locator('.empty-notice[data-state="empty"]')).toContainText("No tags yet");
+    await expect(page.locator('.empty-notice[data-state="empty"]')).toContainText(
+      "No strands yet",
+    );
     // The counts are the server's: it listed no rows, so there is nothing to count.
     await expect(page.locator("#feed-count")).toHaveText("0 tags · 0 threads");
     await context.close();

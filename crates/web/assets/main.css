@@ -1671,6 +1671,62 @@ button {
   margin: 0;
 }
 
+/* first-run (T29): no tags anywhere yet, so the way forward is a connector import,
+ * not a blank capture form. Mirrors the mockup's `.set-lede` / `.btn.primary`
+ * (docs/.../v23.html) inside the existing dashed empty-notice card. */
+.empty-notice.first-run {
+  padding: 24px 20px;
+}
+
+.first-run-lede {
+  margin: 0 auto 18px;
+  max-width: 52ch;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.first-run-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.button-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+}
+
+.button-primary:hover {
+  filter: brightness(1.06);
+}
+
+.first-run-quiet {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--muted) 50%, transparent);
+}
+
+.first-run-quiet:hover {
+  color: var(--fg);
+}
+
 /* the capture form's own failure: the sent note rolled back, so the retry is
  * the same submit again — keep it beside the message, not below the fold. */
 .capture-error {
