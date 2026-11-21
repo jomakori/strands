@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use sqlx::PgPool;
 use strands_core::ConnectorStatus;
-use strands_core::connector::{Connector, ConnectorError, ConnectorFuture, ConnectorManifest};
+use strands_core::connector::{
+    Connector, ConnectorError, ConnectorFuture, ConnectorManifest, ImportItemResult, PreviewItem,
+};
 use uuid::Uuid;
 
 use crate::photos::CONNECTOR_KIND;
@@ -122,10 +124,31 @@ impl Connector for PhotosConnector {
         ))
     }
 
-    fn sync(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Err(ConnectorError(
-            "Google Photos only imports through a pick; there is nothing to sync".to_owned(),
-        ))
+    /// A pick *is* the preview+import step (the picker UI shows what is
+    /// available and importing it happens in the same round trip through
+    /// `create_session`/`poll_session`), so the generic trait path has
+    /// nothing to preview here — same refusal `sync` used to give.
+    fn preview<'a>(
+        &'a self,
+        _user: Uuid,
+    ) -> ConnectorFuture<'a, Result<Vec<PreviewItem>, ConnectorError>> {
+        Box::pin(async {
+            Err(ConnectorError(
+                "Google Photos only imports through a pick; there is nothing to preview".to_owned(),
+            ))
+        })
+    }
+
+    fn import<'a>(
+        &'a self,
+        _user: Uuid,
+        _item_keys: Vec<String>,
+    ) -> ConnectorFuture<'a, Result<Vec<ImportItemResult>, ConnectorError>> {
+        Box::pin(async {
+            Err(ConnectorError(
+                "Google Photos only imports through a pick; there is nothing to sync".to_owned(),
+            ))
+        })
     }
 
     fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
