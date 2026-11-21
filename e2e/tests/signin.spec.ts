@@ -9,6 +9,8 @@ import {
   watchGate,
 } from "../support/session";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Ticket T24. The app is behind a sign-in gate, and the gate is decided by one answer from the
 // API: `GET /api/v1/me`. These specs drive a real bundle in a real browser against `serve.py`,
 // which stands in for that one endpoint, so what is asserted is the render path the shipped
@@ -76,6 +78,7 @@ test.describe("sign-in gate", () => {
     // gate, or that assertion would be vacuous.
     expect((await readGateWatch(page)).gate).toBe(true);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-signin-gate.png`,
       fullPage: false,
@@ -242,6 +245,7 @@ test.describe("sign-in gate", () => {
       "the gate does not fit the first screen without scrolling",
     ).toBeLessThanOrEqual(layout.innerHeight + 1);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-signin-gate-viewport.png`,
       fullPage: false,

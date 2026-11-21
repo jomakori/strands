@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Runs against the release Wasm bundle CI just built. The API is stubbed at the network
 // boundary, exactly like `capture.spec.ts`: the visual job serves the bundle statically with
 // no database behind it, so this test owns the render path while the export/delete endpoints
@@ -65,6 +67,7 @@ test.describe("account", () => {
       `account screen scrolls horizontally: content is ${scrollWidth}px wide in a ${clientWidth}px viewport`,
     ).toBeLessThanOrEqual(clientWidth);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-account.png`,
       fullPage: true,

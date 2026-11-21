@@ -6,9 +6,117 @@
     <meta name="description" content="Strands — a note for every tag." />
     <meta name="theme-color" content="#090d16" />
     <meta name="color-scheme" content="dark" />
+    <meta name="apple-mobile-web-app-title" content="Strands" />
+    <meta property="og:title" content="Strands" />
+    <meta property="og:description" content="A note for every tag." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <title>Strands</title>
+    <!--
+      The shell paints before the app can. `main.css` travels inside the wasm bundle, so at
+      first paint the document has no stylesheet at all: these rules are the ones that have to
+      hold without it — the app's own background instead of white, and the splash below. Every
+      colour therefore carries the token's literal value as its fallback.
+    -->
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+      }
+
+      body {
+        background: var(--bg, oklch(0.16 0.02 265));
+      }
+
+      .splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: grid;
+        place-content: center;
+        justify-items: center;
+        gap: 16px;
+        background: var(--bg, oklch(0.16 0.02 265));
+        /* Nothing under it is reachable yet and nothing here is focusable: the layer is paint
+           only, so it can neither take a tap nor a tab stop, before or after it fades. */
+        pointer-events: none;
+        transition: opacity 200ms var(--ease, cubic-bezier(0.2, 0, 0, 1));
+      }
+
+      .splash[data-leaving="true"] {
+        opacity: 0;
+      }
+
+      .splash-mark {
+        display: block;
+        width: 64px;
+        height: 64px;
+        border-radius: 16px;
+        box-shadow: 0 0 0 1px var(--border, rgb(255 255 255 / 12%)),
+          0 0 40px color-mix(in oklch, var(--accent, oklch(0.86 0.14 95)) 20%, transparent);
+      }
+
+      .splash-word {
+        margin: 0;
+        color: var(--fg, oklch(0.97 0.01 265));
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 22px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        line-height: 1;
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .splash {
+          transition: none;
+        }
+      }
+    </style>
+    <!-- The layer is removed by script; with script off it would sit there for good. -->
+    <noscript><style>#splash { display: none }</style></noscript>
   </head>
   <body>
+    <div class="splash" id="splash" data-testid="splash" aria-hidden="true">
+      <img class="splash-mark" src="/favicon.svg" width="64" height="64" alt="" />
+      <p class="splash-word">Strands</p>
+    </div>
     <div id="main"></div>
+    <!--
+      The splash belongs to this document, not to the app: it is markup in the shell, so a
+      client-side route change cannot bring it back — only a reload paints it again. The app
+      calls `strandsSplashDone` once its first read (`GET /api/v1/me`) answers.
+    -->
+    <script>
+      (function () {
+        var splash = document.getElementById("splash");
+        if (!splash) return;
+        var done = false;
+        var drop = function () {
+          if (!splash.isConnected) return;
+          splash.remove();
+        };
+        window.strandsSplashDone = function () {
+          if (done) return;
+          done = true;
+          clearTimeout(safety);
+          if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            drop();
+            return;
+          }
+          splash.addEventListener("transitionend", drop, { once: true });
+          splash.dataset.leaving = "true";
+          // A missed transition event must not leave the layer over the app.
+          setTimeout(drop, 400);
+        };
+        // A bundle that never boots (bad wasm, no network) would otherwise hold this layer over
+        // an empty page for good: give up the screen instead of the app's own error state.
+        var safety = setTimeout(window.strandsSplashDone, 5000);
+      })();
+    </script>
   </body>
 </html>

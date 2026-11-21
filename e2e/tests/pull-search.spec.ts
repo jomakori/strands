@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Ticket T26 (spec §7.5). A phone has no `/`, so the sheet gets a second door: a drag downward
 // on the strip at the head of the grid, which follows the finger and snaps open or back.
 //
@@ -113,6 +115,7 @@ test.describe("pull down to search", () => {
     await expect(sheet.locator(".sheet__results")).toContainText("Kumquat tasting");
     await expect(sheet.locator(".sheet__results")).toContainText("candied peel");
 
+    await awaitSplashGone(page);
     await page.screenshot({ path: `captures/${testInfo.project.name}-pull-search.png` });
   });
 

@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Ticket T11. The sheet is mounted once by the app shell, so these assertions start from
 // `/` in the release bundle CI serves. No API is reachable behind that static server,
 // which is deliberate: the sheet must still open, focus its field and keep the page within
@@ -29,6 +31,7 @@ test.describe("search sheet", () => {
       `the open sheet scrolls horizontally: ${open.scrollWidth}px in ${open.clientWidth}px`,
     ).toBeLessThanOrEqual(open.clientWidth);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-search-open.png`,
     });
@@ -97,6 +100,7 @@ test.describe("search sheet", () => {
     await expect(sheet.locator(".sheet__results")).toContainText("Kumquat tasting");
     expect(requests).toBeGreaterThan(0);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-search-results.png`,
     });

@@ -25,6 +25,10 @@ use crate::pull::{self, Drag, Pull};
 use crate::routes::Route;
 use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 
+/// The brand mark. One file under `assets/` — `dx` hashes it into the bundle and this is the
+/// URL it landed on, so the header and the shell's favicon cannot drift into two drawings.
+const LOGO: Asset = asset!("/assets/logo.svg");
+
 /// The grid every surface reads: the app provides it once, capture mutates it, home renders it.
 #[derive(Clone, Copy)]
 pub struct Grid(pub Signal<Vec<Tag>>);
@@ -120,34 +124,12 @@ pub fn HomeView() -> Element {
         div { class: "app",
             header { class: "top-row",
                 div { class: "brand",
-                    svg {
+                    img {
                         class: "brand-mark",
+                        src: LOGO,
                         width: "44",
                         height: "44",
-                        view_box: "0 0 32 32",
-                        "aria-hidden": "true",
-                        rect { width: "32", height: "32", rx: "9", fill: "oklch(0.21 0.025 265)" }
-                        g { transform: "translate(16 16) scale(.92) translate(-15.4 -14.1)",
-                            rect {
-                                x: "3.2",
-                                y: "11.2",
-                                width: "22",
-                                height: "13",
-                                rx: "6.5",
-                                fill: "none",
-                                stroke: "oklch(0.97 0.01 265)",
-                                stroke_width: "2.4",
-                            }
-                            path {
-                                d: "M20 11.2 25 6",
-                                fill: "none",
-                                stroke: "oklch(0.97 0.01 265)",
-                                stroke_width: "2.4",
-                                stroke_linecap: "round",
-                            }
-                            circle { cx: "10", cy: "17.7", r: "2.8", fill: "oklch(0.86 0.14 95)" }
-                            circle { cx: "26", cy: "5.6", r: "2.8", fill: "oklch(0.86 0.14 95)" }
-                        }
+                        alt: "",
                     }
                     h1 { class: "brand-word",
                         b { "Strands" }

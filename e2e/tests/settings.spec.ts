@@ -1,6 +1,8 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Runs against the release Wasm bundle CI just built, with the API stubbed at the
 // network boundary the way `account.spec.ts` and `capture.spec.ts` do: the visual
 // job serves the bundle statically with no database behind it, so this file owns
@@ -108,6 +110,7 @@ test.describe("connector settings rows", () => {
       "gmail.readonly",
     ]);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-settings-connectors.png`,
       fullPage: true,

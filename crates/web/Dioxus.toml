@@ -4,4 +4,7 @@ name = "strands-web"
 default_platform = "web"
 
 [web.app]
-title = "Strands"
+# Empty on purpose: `dx` appends this value *inside* the `<title>` element of `index.html`, so any
+# text here lands on top of the title the shell already ships ("StrandsStrands"). The document
+# title belongs to `index.html`; the app keeps it equal at runtime with `document::Title`.
+title = ""

@@ -2,6 +2,8 @@ import { expect, test, type Page } from "@playwright/test";
 
 import { PROFILE } from "../support/session";
 
+import { awaitSplashGone } from "../support/splash";
+
 // Ticket T18. Every fetch that can fail has to hand the request back to the reader: a
 // notice that names what broke, a control that re-issues the same call, and no state
 // where the page only says "something went wrong". These specs stub the API at the
@@ -77,6 +79,7 @@ test.describe("retry affordance", () => {
     await button.click();
     await expect.poll(() => calls.length).toBeGreaterThan(before);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-retry-account.png`,
       fullPage: false,
@@ -101,6 +104,7 @@ test.describe("retry affordance", () => {
     await button.click();
     await expect.poll(() => calls.length).toBeGreaterThan(before);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-retry-tag-card.png`,
     });
@@ -167,6 +171,7 @@ test.describe("retry affordance", () => {
     await button.click();
     await expect.poll(() => calls.length).toBeGreaterThan(before);
 
+    await awaitSplashGone(page);
     await page.screenshot({
       path: `captures/${testInfo.project.name}-retry-ingest.png`,
     });
