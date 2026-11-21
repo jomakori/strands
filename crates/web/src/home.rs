@@ -20,6 +20,8 @@ use uuid::Uuid;
 
 use crate::api::{self, ApiError};
 use crate::data::{self, Category, Tag};
+use crate::keys::Shortcuts;
+use crate::pull::{self, Drag, Pull};
 use crate::routes::Route;
 use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 
@@ -164,6 +166,7 @@ pub fn HomeView() -> Element {
                 }
             }
             main { class: "feed", "aria-label": "Strands feed",
+                PullStrip {}
                 div { class: "feed-inner",
                     div { class: "feed-head",
                         div {
@@ -331,4 +334,88 @@ fn toggle(mut active: Signal<Vec<Category>>, category: Category) {
         }
         None => selected.push(category),
     }
+}
+
+/// The pull surface above the grid (T26, spec §7.5): a finger drags it down to search.
+///
+/// It renders only where the primary pointer is a finger. Without one there is nothing to
+/// drag, `/` already opens the same sheet, and a strip of dead space above the first chip is
+/// the sort of thing a desktop user reads as a bug.
+///
+/// The drag is real pointer events, not a synthesis of keystrokes: the sheet has to follow the
+/// finger, and only the pointer knows where the finger is. `touch-action: none` on this one
+/// element is what keeps the events ours — see [`crate::pull`].
+#[component]
+fn PullStrip() -> Element {
+    let pull = use_context::<Pull>();
+    let shortcuts = use_context::<Shortcuts>();
+    let mut drag = use_signal(Drag::default);
+
+    if !coarse_pointer() {
+        return rsx! {};
+    }
+
+    rsx! {
+        div {
+            id: pull::STRIP,
+            class: "pull",
+            "aria-hidden": "true",
+            "data-testid": "pull-strip",
+            onpointerdown: move |event| {
+                let data = event.data();
+                // A mouse drag across a list is a selection, and a finger is the only thing
+                // that can pull: anything else is left to the page.
+                if data.pointer_type() == "mouse" {
+                    return;
+                }
+                let point = data.client_coordinates();
+                // The offset is read here rather than tracked in a signal: it is the browser's
+                // number, it changes without telling us, and a stale copy would let a scrolled
+                // grid open the sheet.
+                drag.write().down(point.x, point.y, pull::scroll_offset() <= 0.0);
+            },
+            onpointermove: move |event| {
+                let point = event.data().client_coordinates();
+                let Some(distance) = drag.write().mov(point.x, point.y, true) else {
+                    return;
+                };
+                let mut pull = pull;
+                pull.follow(distance);
+            },
+            onpointerup: move |_| {
+                let Some(distance) = drag.write().up() else {
+                    return;
+                };
+                if pull::commits(distance) {
+                    let mut pull = pull;
+                    pull.settle_open();
+                    let mut shortcuts = shortcuts;
+                    shortcuts.search_open.set(true);
+                } else {
+                    // Under the threshold nothing happened: the panel goes back where it was,
+                    // and the grid never moved, so there is nothing to undo there.
+                    let mut pull = pull;
+                    pull.settle_shut();
+                }
+            },
+            onpointercancel: move |_| {
+                // The browser took the pointer for a pan. Whatever the sheet was showing the
+                // user did not ask for, so it goes back.
+                drag.write().cancel();
+                let mut pull = pull;
+                pull.settle_shut();
+            },
+            div { class: "pull__grip" }
+        }
+    }
+}
+
+/// Whether this device's primary pointer is a finger.
+///
+/// `matchMedia` rather than a viewport width: a narrow window on a desktop is still a desktop,
+/// and a tablet in landscape is still a finger.
+fn coarse_pointer() -> bool {
+    web_sys::window()
+        .and_then(|window| window.match_media("(pointer: coarse)").ok().flatten())
+        .is_some_and(|query| query.matches())
 }

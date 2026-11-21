@@ -751,6 +751,30 @@ button {
  * there is room. Everything sizes in rem/%, so the 360px capture never scrolls sideways.
  */
 
+/* ---------- pull to search (T26, spec §7.5) ---------- */
+
+/* The strip at the head of the grid, and the only surface a finger can pull from.
+ *
+ * `touch-action: none` is the whole gesture: without it the browser claims a downward drag as
+ * a pan, cancels the pointer on the first move, and no pointer handler ever sees the pull.
+ * It is on this element and nowhere else — the feed and the cards still have to scroll.
+ */
+.pull {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 30px;
+  touch-action: none;
+  /* Nothing here is a link or a card: the strip must not inherit a pointer cursor. */
+  cursor: grab;
+}
+
+.pull__grip {
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
 .sheet {
   position: fixed;
   inset: 0;
@@ -760,6 +784,13 @@ button {
   justify-content: center;
   background: color-mix(in oklch, var(--bg) 74%, transparent);
   padding: 0;
+}
+
+/* While the sheet is sliding away it must not answer a tap: the panel is in the tree for one
+ * animation more, and an invisible layer that swallowed a click would be worse than the
+ * animation is worth. */
+.sheet[data-closing="true"] {
+  pointer-events: none;
 }
 
 .sheet__panel {
@@ -775,6 +806,43 @@ button {
   border-bottom: 0;
   border-radius: var(--radius) var(--radius) 0 0;
   box-shadow: 0 -18px 60px color-mix(in oklch, var(--bg) 60%, transparent);
+  /* How far the panel still sits below its resting place, as a fraction of its own height. The
+     gesture sets `--pull`; the browser does the arithmetic in its own units, so the pull never
+     has to measure the panel, and the panel is never a pixel off the finger. */
+  transform: translateY(calc(var(--pull, 0) * 100%));
+  transition: transform 220ms var(--ease);
+}
+
+/* A panel that is being dragged must sit exactly under the finger: the animation is only for
+ * the release. */
+.sheet[data-dragging="true"] .sheet__panel {
+  transition: none;
+}
+
+/* The grabber, and the only part of the sheet a drag can start on: `touch-action: none` again,
+ * because an upward swipe anywhere that scrolls is a scroll before it is a swipe. */
+.sheet__grip {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  margin-top: -6px;
+  touch-action: none;
+  cursor: grab;
+}
+
+.sheet__grip::before {
+  content: "";
+  width: 36px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+@media (pointer: coarse) {
+  .sheet__grip {
+    display: flex;
+  }
 }
 
 .sheet__form {

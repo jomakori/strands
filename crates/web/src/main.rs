@@ -10,6 +10,7 @@ mod focus_trap;
 mod help;
 mod home;
 mod keys;
+mod pull;
 mod routes;
 mod search;
 mod session;
