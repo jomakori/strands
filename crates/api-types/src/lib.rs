@@ -9,6 +9,7 @@
 mod account;
 mod category;
 mod connector;
+mod connector_items;
 mod gmaps;
 mod ingest;
 mod link;
@@ -27,6 +28,10 @@ pub use account::{
 };
 pub use category::CategorySummary;
 pub use connector::{ConnectorStatus, ConnectorSummary};
+pub use connector_items::{
+    ConnectorHistory, ConnectorHistoryRun, ConnectorImportItemResult, ConnectorImportOutcome,
+    ConnectorImportRequest, ConnectorImportResult, ConnectorPreview, ConnectorPreviewItem,
+};
 pub use gmaps::{GmapsFormat, GmapsIngestResult, PlaceEnrichment, PlaceListSummary, PlaceSummary};
 pub use ingest::{IngestItem, IngestRequest, IngestResult};
 pub use link::{JudgeLinksResponse, LinkSummary};

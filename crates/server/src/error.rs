@@ -12,6 +12,7 @@ use serde_json::json;
 use crate::auth::AuthError;
 use crate::llm::LlmError;
 use crate::whatsapp::bridge::WhatsAppError;
+use strands_core::connector::ConnectorError;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -84,6 +85,18 @@ impl From<WhatsAppError> for AppError {
                 source: sqlx::Error::Protocol(error.to_string()),
             },
         }
+    }
+}
+
+impl From<ConnectorError> for AppError {
+    fn from(error: ConnectorError) -> Self {
+        // `ConnectorError`'s own text is written to be safe to show (see its
+        // doc comment), and it reports exactly the same condition the
+        // existing WhatsApp/Photos action routes use `Unavailable` for ("no
+        // WhatsApp link is open", "Google Photos only imports through a
+        // pick"): a feature this connector or this deploy cannot do right
+        // now, not a server bug.
+        Self::Unavailable(error.0)
     }
 }
 

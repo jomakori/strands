@@ -9,6 +9,7 @@
 
 use std::collections::HashSet;
 
+use chrono::{DateTime, Utc};
 use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -79,6 +80,48 @@ pub async fn record_import(
     .fetch_optional(&mut **tx)
     .await?;
     Ok(inserted.is_some())
+}
+
+/// One run's row in `GET .../history`: every `connector_items` row sharing the
+/// same `imported_at` truncated to the second groups into one run, because
+/// rows a single `import` call writes land in the same transaction and
+/// therefore the same wall-clock second. There is no run id column (T33c
+/// scope keeps the migration as-is), so this grouping is the only "run"
+/// boundary available.
+pub struct HistoryRun {
+    pub imported_at: DateTime<Utc>,
+    pub imported: usize,
+}
+
+/// This user's import runs for `connector`, newest first.
+///
+/// A skip (an item already in the ledger) writes no row at all —
+/// `record_import`'s `ON CONFLICT DO NOTHING` is exactly what makes a repeat
+/// import a no-op — so there is nothing in `connector_items` to recover a
+/// historical skip count from; the caller reports `skipped: 0` for every run.
+pub async fn history(
+    pool: &PgPool,
+    user_id: Uuid,
+    connector: &str,
+) -> Result<Vec<HistoryRun>, sqlx::Error> {
+    let rows: Vec<(DateTime<Utc>, i64)> = sqlx::query_as(
+        "SELECT date_trunc('second', imported_at) AS run_at, count(*) \
+          FROM connector_items \
+          WHERE user_id = $1 AND connector = $2 \
+          GROUP BY run_at \
+          ORDER BY run_at DESC",
+    )
+    .bind(user_id)
+    .bind(connector)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(imported_at, imported)| HistoryRun {
+            imported_at,
+            imported: imported as usize,
+        })
+        .collect())
 }
 
 #[cfg(test)]
