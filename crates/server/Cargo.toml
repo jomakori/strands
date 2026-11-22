@@ -41,8 +41,11 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 # content type, conditional requests and traversal refusal right (T20a).
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1", features = ["v4"] }
-whatsapp-rust = { version = "0.7", default-features = false, features = [
+whatsapp-rust = { git = "https://github.com/oxidezap/whatsapp-rust", rev = "718306460c7ea18b6a90ead7b3e504befc60dce3", default-features = false, features = [
+  "tracing",
   "tokio-transport",
   "tokio-runtime",
   "tokio-native",
