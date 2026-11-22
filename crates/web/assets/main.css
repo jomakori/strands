@@ -199,6 +199,58 @@ button {
   display: none;
 }
 
+.top-row.screen-head {
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 10px;
+}
+
+.screen-head .back {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: start;
+  min-width: 0;
+  max-width: 100%;
+  height: 44px;
+  padding: 0 14px 0 10px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: color-mix(in oklch, var(--fg) 5%, transparent);
+  color: var(--muted);
+  font-size: 14px;
+  transition:
+    background 0.15s var(--ease),
+    border-color 0.15s var(--ease),
+    color 0.15s var(--ease);
+}
+
+.screen-head .back:hover {
+  color: var(--fg);
+  background: color-mix(in oklch, var(--fg) 12%, transparent);
+  border-color: var(--border-strong);
+}
+
+.screen-head .back span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.screen-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.screen-head .icon-btn {
+  justify-self: end;
+}
+
 .feed {
   flex: 1;
   width: 100%;
@@ -1925,6 +1977,53 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.connector-open {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  margin: -6px -6px 0;
+  padding: 6px;
+  border-radius: 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.connector-open:hover {
+  background: color-mix(in oklch, var(--fg) 6%, transparent);
+}
+
+.connector-open .connector-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.connector-act {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.connector-chevron {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.connector-panel {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.connector-panel .connector-import-link {
+  justify-self: start;
 }
 
 .connector-label {

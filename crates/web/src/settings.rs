@@ -19,6 +19,7 @@ use strands_api_types::{
 };
 
 use crate::api;
+use crate::nav::ScreenHead;
 use crate::routes::Route;
 use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 
@@ -39,14 +40,13 @@ pub fn Settings() -> Element {
 
     rsx! {
         div { class: "app",
-            header { class: "top-row",
-                Link { class: "back-link", to: Route::HomeView {}, "aria-label": "Back to tags",
-                    "← Tags"
-                }
+            ScreenHead {
+                title: "Connectors".to_string(),
+                title_id: Some("settings-title".to_string()),
+                close_to: Route::HomeView {},
             }
             main { class: "feed", "aria-label": "Connector settings",
                 div { class: "feed-inner",
-                    h1 { class: "name", id: "settings-title", "Connectors" }
                     match &*connectors.read() {
                         None => rsx! { Skeleton { lines: 3, label: "Loading connectors…" } },
                         Some(Ok(summaries)) => rsx! { ConnectorList { summaries: summaries.clone() } },
@@ -96,11 +96,33 @@ fn ConnectorList(summaries: Vec<ConnectorSummary>) -> Element {
 /// reach in and change this row's markup.
 #[component]
 fn ConnectorRow(summary: ConnectorSummary) -> Element {
+    let act = match summary.status {
+        Some(ConnectorStatus::Connected) => "Manage",
+        _ => "Connect",
+    };
+
     rsx! {
         article { class: "connector-row", "data-connector-id": "{summary.id}", role: "listitem",
-            div { class: "connector-head",
+            Link {
+                class: "connector-open",
+                to: Route::ConnectorScreen { id: summary.id.clone() },
+                "aria-label": "{act} {summary.label}",
                 span { class: "connector-label", "{summary.label}" }
                 StatusChip { status: summary.status, has_error: summary.error.is_some() }
+                span { class: "connector-act", "{act}" }
+                svg {
+                    class: "connector-chevron",
+                    width: "16",
+                    height: "16",
+                    view_box: "0 0 24 24",
+                    fill: "none",
+                    stroke: "currentColor",
+                    stroke_width: "1.8",
+                    stroke_linecap: "round",
+                    stroke_linejoin: "round",
+                    "aria-hidden": "true",
+                    path { d: "m9 6 6 6-6 6" }
+                }
             }
             if !summary.scopes.is_empty() {
                 ul { class: "connector-scopes", "aria-label": "Scopes",
@@ -111,12 +133,6 @@ fn ConnectorRow(summary: ConnectorSummary) -> Element {
             }
             if let Some(error) = &summary.error {
                 p { class: "connector-error", "data-connector-error": "true", "{error}" }
-            }
-            Link {
-                class: "button connector-import-link",
-                "data-testid": "connector-import-link",
-                to: Route::ImportWizard { id: summary.id.clone() },
-                "Import…"
             }
         }
     }
@@ -323,7 +339,7 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
 /// The chip: one of the four known statuses, or "Error" when the connector's own
 /// status check failed (its message lives in [`ConnectorRow`]'s error text, not here).
 #[component]
-fn StatusChip(status: Option<ConnectorStatus>, has_error: bool) -> Element {
+pub(crate) fn StatusChip(status: Option<ConnectorStatus>, has_error: bool) -> Element {
     let (key, text) = match status {
         Some(ConnectorStatus::Connected) => ("connected", "Connected"),
         Some(ConnectorStatus::NeedsSignIn) => ("needs-sign-in", "Needs sign-in"),

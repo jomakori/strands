@@ -19,6 +19,7 @@ use crate::api::{self, ApiError};
 use crate::data::{self, Tag, ThreadPreview};
 use crate::home::{CatGlyph, Grid, HomeLoad, Phase};
 use crate::keys::Shortcuts;
+use crate::nav::ScreenHead;
 use crate::routes::Route;
 use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 
@@ -42,10 +43,11 @@ pub fn TagDetail(tag_id: String) -> Element {
 
     rsx! {
         div { class: "app",
-            header { class: "top-row",
-                Link { class: "back-link", to: Route::HomeView {}, "aria-label": "Back to tags",
-                    "← Tags"
-                }
+            ScreenHead {
+                title: tag.as_ref().map(|tag| tag.name.clone()).unwrap_or_else(|| "Tag".to_string()),
+                back_label: Some("Tags".to_string()),
+                back_to: Some(Route::HomeView {}),
+                close_to: Route::HomeView {},
             }
             main { class: "feed", "aria-label": "Tag detail",
                 div { class: "feed-inner",
