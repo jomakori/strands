@@ -1,0 +1,142 @@
+name: preview-image
+
+# Every pull request from this repository gets a throwaway image on its own
+# tag, so a reviewer can run the commit the pull request proposes without
+# cutting a release. The image is only advertised — the `preview` label — after
+# the registry confirmed the push, so a label can never point at nothing.
+#
+# Fork pull requests are skipped entirely: their token is read-only, so the push
+# could only fail and the label would be a lie. `release.yml` stays the only
+# workflow that publishes versioned tags.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+permissions:
+  contents: read
+
+# A newer push supersedes the older preview of the same pull request. Closing is
+# the one run that must never be cancelled away from its label cleanup.
+concurrency:
+  group: preview-image-${{ github.event.pull_request.number }}
+  cancel-in-progress: ${{ github.event.action != 'closed' }}
+
+jobs:
+  image:
+    name: Build and push the preview image
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+      pull-requests: write
+      issues: write
+    env:
+      IMAGE: ghcr.io/jomakori/strands
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out the merge commit the image is built from
+        uses: actions/checkout@v7
+
+      # The label has to exist before it can be applied, and a repository that
+      # never ran this workflow before has none.
+      - name: Ensure the preview label exists
+        run: >-
+          gh label create preview --color 1e90ff
+          --description "Preview image published for this pull request" --force
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the registry
+        run: >-
+          echo "${{ secrets.GITHUB_TOKEN }}"
+          | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # Native arm64 runner, so no QEMU: the same platform and the same
+      # Dockerfile the release builds. GIT_COMMIT is the commit actually built
+      # — the merge result — which is what /healthz will report.
+      - name: Build and push the preview image
+        run: |
+          docker buildx build \
+            --push \
+            --platform linux/arm64 \
+            --build-arg GIT_COMMIT="${{ github.sha }}" \
+            --cache-from type=gha,scope=preview \
+            --cache-to type=gha,mode=max,scope=preview \
+            --tag "${IMAGE}:pr-${PR_NUMBER}" \
+            .
+
+      # The registry is the only witness that the push landed. `docker manifest
+      # inspect` asks it directly: a tag that does not resolve fails the job
+      # before any label is applied.
+      - name: Verify the pushed tag and record the digest
+        id: verify
+        run: |
+          set -euo pipefail
+          ref="${IMAGE}:pr-${PR_NUMBER}"
+          docker manifest inspect "${ref}" >/dev/null
+          docker manifest inspect --verbose "${ref}" >preview-manifest.json
+
+          # A single-platform push is one manifest; with attestations enabled it
+          # is an index. Take the linux/arm64 entry either way, so the digest
+          # printed below is the image and not an attestation.
+          digest="$(jq -r '
+            (if type == "array" then . else [.] end)
+            | .[]
+            | select(.Descriptor.platform.os == "linux"
+                and .Descriptor.platform.architecture == "arm64")
+            | .Descriptor.digest
+          ' preview-manifest.json | head -n1)"
+
+          if ! [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::${ref} carries no linux/arm64 digest in the registry (got '${digest}')"
+            exit 1
+          fi
+
+          echo "digest=${digest}" >>"${GITHUB_OUTPUT}"
+          {
+            echo "### Preview image"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Tag | \`${ref}\` |"
+            echo "| Digest | \`${digest}\` |"
+            echo "| Platform | \`linux/arm64\` |"
+            echo "| Commit | \`${{ github.sha }}\` |"
+            echo
+            echo "Pull it with \`docker pull ${ref}@${digest}\`."
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Label the pull request
+        run: gh pr edit "${PR_NUMBER}" --add-label preview
+
+      # A stale label would advertise an image that does not match the branch.
+      # `|| true` because a first-ever failure happens before the label is set.
+      - name: Drop the label when the build or push failed
+        if: failure()
+        run: gh pr edit "${PR_NUMBER}" --remove-label preview || true
+
+  unlabel:
+    name: Drop the label from the closed pull request
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: write
+      issues: write
+    env:
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Remove the preview label
+        run: |
+          gh pr edit "${PR_NUMBER}" --remove-label preview \
+            || echo "#${PR_NUMBER} never carried the preview label"
