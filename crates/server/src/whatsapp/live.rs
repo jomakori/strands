@@ -37,6 +37,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::DateTime;
 use strands_core::UserId;
 use whatsapp_rust::pair_code::PairCodeOptions;
 use whatsapp_rust::prelude::*;
@@ -111,8 +112,9 @@ impl Shared {
 
         let message = BufferedMessage {
             jid: chat,
-            message_id: ctx.info.id.clone(),
-            sent_at: ctx.info.timestamp,
+            message_id: ctx.info.id.to_string(),
+            sent_at: DateTime::from_timestamp_millis(ctx.info.timestamp.as_millis())
+                .unwrap_or_default(),
             from_me: ctx.info.source.is_from_me,
             sender: Some(ctx.info.source.sender.to_string()),
             body: ctx.message.text_content().unwrap_or_default().to_owned(),
@@ -203,7 +205,7 @@ impl WhatsAppSession for LiveSession {
             // Tell the phone first — this is what removes the device from its
             // linked-devices list. Local teardown happens regardless, so a
             // failed request cannot leave a half-alive session behind.
-            handle.client().logout().await;
+            let _ = handle.client().logout().await;
             let _ = tokio::time::timeout(SHUTDOWN_TIMEOUT, handle).await;
             self.shared.mutate(LinkState::on_unlinked);
             Ok(())

@@ -23,6 +23,12 @@ use strands_server::whatsapp::store::SessionCipher;
 
 #[tokio::main]
 async fn main() {
+    let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,whatsapp_rust=info".to_owned());
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .init();
+
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = db::connect_and_migrate(&database_url)
         .await
