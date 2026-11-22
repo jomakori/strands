@@ -10,6 +10,7 @@ use strands_keymap::Action;
 
 use crate::account::Account;
 use crate::capture::Capture;
+use crate::connector::ConnectorScreen;
 use crate::constellation::Constellation;
 use crate::detail::TagDetail;
 use crate::help::ShortcutMap;
@@ -42,6 +43,9 @@ pub enum Route {
 
     #[route("/connectors/:id/import")]
     ImportWizard { id: String },
+
+    #[route("/connectors/:id")]
+    ConnectorScreen { id: String },
 
     #[route("/account")]
     Account {},
