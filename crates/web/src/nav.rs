@@ -90,3 +90,55 @@ pub fn TopRow() -> Element {
         }
     }
 }
+
+/// The header the drilled screens share: back on the left, the title centred, close on the right.
+///
+/// A screen at its root passes no back label, which is how the mockup hides the button until
+/// there is somewhere to go.
+#[component]
+pub fn ScreenHead(
+    title: String,
+    #[props(default)] title_id: Option<String>,
+    #[props(default)] back_label: Option<String>,
+    #[props(default)] back_to: Option<Route>,
+    close_to: Route,
+) -> Element {
+    rsx! {
+        header { class: "top-row screen-head",
+            if let (Some(label), Some(destination)) = (back_label.clone(), back_to) {
+                Link {
+                    class: "back",
+                    to: destination,
+                    "aria-label": "Back to {label}",
+                    svg {
+                        width: "16",
+                        height: "16",
+                        view_box: "0 0 24 24",
+                        fill: "none",
+                        stroke: "currentColor",
+                        stroke_width: "1.8",
+                        stroke_linecap: "round",
+                        stroke_linejoin: "round",
+                        "aria-hidden": "true",
+                        path { d: "m15 6-6 6 6 6" }
+                    }
+                    span { "{label}" }
+                }
+            }
+            h2 { class: "screen-title", id: title_id.clone(), "{title}" }
+            Link { class: "icon-btn", to: close_to, "aria-label": "Close",
+                svg {
+                    width: "18",
+                    height: "18",
+                    view_box: "0 0 24 24",
+                    fill: "none",
+                    stroke: "currentColor",
+                    stroke_width: "1.8",
+                    stroke_linecap: "round",
+                    "aria-hidden": "true",
+                    path { d: "M6 6l12 12M18 6 6 18" }
+                }
+            }
+        }
+    }
+}
