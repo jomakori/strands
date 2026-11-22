@@ -22,13 +22,10 @@ use crate::api::{self, ApiError};
 use crate::compose::{NewStrandFab, NewStrandSheet};
 use crate::data::{self, Category, Tag};
 use crate::keys::Shortcuts;
+use crate::nav::TopRow;
 use crate::pull::{self, Drag, Pull};
 use crate::routes::Route;
 use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
-
-/// The brand mark. One file under `assets/` — `dx` hashes it into the bundle and this is the
-/// URL it landed on, so the header and the shell's favicon cannot drift into two drawings.
-const LOGO: Asset = asset!("/assets/logo.svg");
 
 /// The grid every surface reads: the app provides it once, capture mutates it, home renders it.
 #[derive(Clone, Copy)]
@@ -128,25 +125,7 @@ pub fn HomeView() -> Element {
 
     rsx! {
         div { class: "app has-fab",
-            header { class: "top-row",
-                div { class: "brand",
-                    img {
-                        class: "brand-mark",
-                        src: LOGO,
-                        width: "44",
-                        height: "44",
-                        alt: "",
-                    }
-                    h1 { class: "brand-word",
-                        b { "Strands" }
-                        span { class: "strand", "aria-hidden": "true",
-                            svg { view_box: "0 0 100 6", preserve_aspect_ratio: "none",
-                                path { d: "M0 3C10 .5 18 5.5 30 3S52 .5 64 3S88 5.5 100 3" }
-                            }
-                        }
-                    }
-                }
-            }
+            TopRow {}
             main { class: "feed", "aria-label": "Strands feed",
                 PullStrip {}
                 div { class: "feed-inner",

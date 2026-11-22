@@ -12,6 +12,7 @@ mod help;
 mod home;
 mod import;
 mod keys;
+mod nav;
 mod pull;
 mod routes;
 mod search;
