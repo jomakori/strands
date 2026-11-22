@@ -29,3 +29,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx semantic-release
+      - name: Pin production to this release
+        env:
+          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="$(git describe --tags --abbrev=0)"
+          version="${tag#v}"
+          gitops="$(mktemp -d)"
+          git clone --depth 1 "https://x-access-token:${GITOPS_TOKEN}@github.com/jomakori/gke_GitOps.git" "$gitops"
+          python3 .github/scripts/pin_strands.py "$gitops/apps/helm/values.yaml" "$version"
+          cd "$gitops"
+          if git diff --quiet; then
+            echo "strands production already pinned to ${version}"
+            exit 0
+          fi
+          git -c user.name="strands-release[bot]" -c user.email="release@users.noreply.github.com" \
+            commit -q -am "chore(apps): pin strands prod to ${version}"
+          git push -q origin HEAD:main
+          echo "pinned strands production to ${version}"
