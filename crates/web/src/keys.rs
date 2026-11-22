@@ -45,6 +45,12 @@ impl Shortcuts {
         Some(action)
     }
 
+    /// Raise an action from a pointer, through the same path the keys use.
+    pub fn raise(self, action: Action) {
+        let mut state = self;
+        state.pending.set(Some(action));
+    }
+
     /// Hand an action to the mounted screen; it decides whether the action is its own.
     pub fn park(self, action: Action) {
         let mut state = self;
