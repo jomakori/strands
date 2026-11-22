@@ -86,7 +86,7 @@ async fn main() {
     // once here: the settings row and every `/api/v1/whatsapp` route share the
     // same session registry, and a deploy without a connector key gets none at
     // all (the row then reports the missing key instead of offering a dead link).
-    let whatsapp_cipher = SessionCipher::from_env().ok();
+    let whatsapp_cipher = SessionCipher::from_env();
     let whatsapp_sessions = whatsapp_cipher
         .as_ref()
         .map(|_| Arc::new(WhatsAppRegistry::new(Arc::new(LiveFactory::from_env()))));

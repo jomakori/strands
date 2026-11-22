@@ -39,7 +39,7 @@ use strands_server::app::{AppState, router};
 use strands_server::auth::identity::{BoxFuture, ConsentRequest};
 use strands_server::auth::{AuthError, Identity, IdentityProvider};
 use strands_server::config::AuthConfig;
-use strands_server::secrets::SecretKey;
+use strands_server::secrets::{CURRENT_KEY_VERSION, SecretKey};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -266,14 +266,18 @@ impl Harness {
         .execute(&self.pool)
         .await
         .expect("insert connector");
-        let sealed = self.key.seal("ya29.test-token").expect("seal the token");
+        let sealed = self
+            .key
+            .seal(user.id, b"ya29.test-token")
+            .expect("seal the token");
         sqlx::query(
-            "INSERT INTO connector_secrets (connector_id, user_id, ciphertext) \
-             VALUES ($1, $2, $3)",
+            "INSERT INTO connector_secrets (connector_id, user_id, ciphertext, key_version) \
+             VALUES ($1, $2, $3, $4)",
         )
         .bind(connector_id)
         .bind(user.id)
         .bind(sealed)
+        .bind(CURRENT_KEY_VERSION)
         .execute(&self.pool)
         .await
         .expect("insert connector secret");
