@@ -31,7 +31,7 @@ use strands_server::auth::identity::BoxFuture;
 use strands_server::auth::{AuthError, ConsentRequest, Identity, IdentityProvider};
 use strands_server::config::AuthConfig;
 use strands_server::connectors::build_registry;
-use strands_server::secrets::SecretKey;
+use strands_server::secrets::{CURRENT_KEY_VERSION, SecretKey};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -118,12 +118,16 @@ async fn connect_photos(pool: &PgPool, user: &TestUser, key: &SecretKey, token: 
     .execute(pool)
     .await
     .expect("insert connector");
+    // Sealed at the current key version because `seal` derives per user; the
+    // column default of 1 exists only for rows written before C2.
     sqlx::query(
-        "INSERT INTO connector_secrets (connector_id, user_id, ciphertext) VALUES ($1, $2, $3)",
+        "INSERT INTO connector_secrets (connector_id, user_id, ciphertext, key_version) \
+         VALUES ($1, $2, $3, $4)",
     )
     .bind(connector_id)
     .bind(user.id)
-    .bind(key.seal(token).expect("seal the token"))
+    .bind(key.seal(user.id, token.as_bytes()).expect("seal the token"))
+    .bind(CURRENT_KEY_VERSION)
     .execute(pool)
     .await
     .expect("insert connector secret");

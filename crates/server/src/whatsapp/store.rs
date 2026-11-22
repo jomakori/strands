@@ -5,11 +5,7 @@
 //! allowlist's job in `bridge.rs`. This module only stores what the allowlist
 //! already approved.
 
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use chrono::{DateTime, Utc};
-use ring::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
-use ring::rand::{SecureRandom, SystemRandom};
 use sqlx::{PgPool, Postgres, Transaction};
 use strands_core::{Note, Source};
 use uuid::Uuid;
@@ -17,6 +13,7 @@ use uuid::Uuid;
 use crate::connectors::ledger;
 use crate::error::AppError;
 use crate::ingest::TagIndex;
+use crate::secrets::{CURRENT_KEY_VERSION, Opened, SecretError, SecretKey};
 use crate::whatsapp::bridge::{AllowList, ChatSummary, Jid};
 
 /// The `connectors.kind` this module owns.
@@ -25,82 +22,57 @@ pub const CONNECTOR_KIND: &str = "whatsapp";
 /// Tag every imported chat's thread sits under.
 const IMPORT_TAG: &str = "WhatsApp";
 
-/// Nonce length AES-GCM requires; the prefix of every stored ciphertext.
-const NONCE_BYTES: usize = 12;
-
-/// Encrypts connector secrets at rest with AES-256-GCM.
+/// Seals and opens connector secrets in one account's context.
 ///
-/// The key comes from the environment and is never derived from, or stored
-/// beside, the ciphertext: `connector_secrets.ciphertext` holds
-/// `nonce || ciphertext || tag` and nothing else.
+/// A thin front for [`SecretKey`]: a WhatsApp session blob and an OAuth token are
+/// the same at-rest problem, so they share one per-user derivation and one
+/// key-version story rather than keeping two copies of AES-GCM in the tree.
 #[derive(Clone)]
 pub struct SessionCipher {
-    key: std::sync::Arc<LessSafeKey>,
+    key: std::sync::Arc<SecretKey>,
 }
 
 impl SessionCipher {
-    /// Read the shared connector key as base64 of exactly 32 bytes.
-    pub fn from_env() -> Result<Self, std::env::VarError> {
-        let raw = std::env::var(crate::secrets::KEY_ENV)?;
-        Self::from_base64(&raw).ok_or(std::env::VarError::NotPresent)
-    }
-
-    pub fn from_base64(encoded: &str) -> Option<Self> {
-        let bytes = BASE64.decode(encoded.trim()).ok()?;
-        Self::from_bytes(&bytes)
-    }
-
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let unbound = UnboundKey::new(&AES_256_GCM, bytes).ok()?;
+    /// The master key, as base64 of exactly 32 bytes.
+    pub fn from_env() -> Option<Self> {
+        let key = SecretKey::from_env()?.ok()?;
         Some(Self {
-            key: std::sync::Arc::new(LessSafeKey::new(unbound)),
+            key: std::sync::Arc::new(key),
         })
     }
 
-    pub fn seal(&self, plaintext: &[u8]) -> Result<Vec<u8>, AppError> {
-        let mut nonce_bytes = [0u8; NONCE_BYTES];
-        SystemRandom::new().fill(&mut nonce_bytes).map_err(|_| {
-            AppError::internal("whatsapp nonce", sqlx::Error::Protocol("rng".into()))
-        })?;
-        let mut sealed = plaintext.to_vec();
-        self.key
-            .seal_in_place_append_tag(
-                Nonce::assume_unique_for_key(nonce_bytes),
-                Aad::empty(),
-                &mut sealed,
-            )
-            .map_err(|_| {
-                AppError::internal("whatsapp seal", sqlx::Error::Protocol("aead".into()))
-            })?;
-        let mut stored = Vec::with_capacity(NONCE_BYTES + sealed.len());
-        stored.extend_from_slice(&nonce_bytes);
-        stored.extend_from_slice(&sealed);
-        Ok(stored)
+    pub fn from_base64(encoded: &str) -> Option<Self> {
+        let key = SecretKey::from_base64(encoded).ok()?;
+        Some(Self {
+            key: std::sync::Arc::new(key),
+        })
     }
 
-    pub fn open(&self, stored: &[u8]) -> Result<Vec<u8>, AppError> {
-        if stored.len() <= NONCE_BYTES {
-            return Err(AppError::internal(
-                "whatsapp open",
-                sqlx::Error::Protocol("truncated secret".into()),
-            ));
-        }
-        let (nonce_bytes, sealed) = stored.split_at(NONCE_BYTES);
-        let mut nonce = [0u8; NONCE_BYTES];
-        nonce.copy_from_slice(nonce_bytes);
-        let mut buffer = sealed.to_vec();
-        let plaintext = self
-            .key
-            .open_in_place(
-                Nonce::assume_unique_for_key(nonce),
-                Aad::empty(),
-                &mut buffer,
-            )
-            .map_err(|_| {
-                AppError::internal("whatsapp open", sqlx::Error::Protocol("aead".into()))
-            })?;
-        Ok(plaintext.to_vec())
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let key = SecretKey::from_bytes(bytes)?;
+        Some(Self {
+            key: std::sync::Arc::new(key),
+        })
     }
+
+    /// Seal a session blob for `user_id`, always at the current key version.
+    pub fn seal(&self, user_id: Uuid, plaintext: &[u8]) -> Result<Vec<u8>, AppError> {
+        self.key
+            .seal(user_id, plaintext)
+            .map_err(|error| secret_error("whatsapp seal", error))
+    }
+
+    /// Open a stored blob, reporting the re-sealed bytes when the row was
+    /// written by an older key version.
+    pub fn open(&self, user_id: Uuid, key_version: i16, stored: &[u8]) -> Result<Opened, AppError> {
+        self.key
+            .open_upgrading(user_id, key_version, stored)
+            .map_err(|error| secret_error("whatsapp open", error))
+    }
+}
+
+fn secret_error(context: &'static str, error: SecretError) -> AppError {
+    AppError::internal(context, sqlx::Error::Protocol(error.to_string()))
 }
 
 /// The connector row's own state, as the routes need it.
@@ -218,7 +190,10 @@ pub async fn set_status(
     Ok(())
 }
 
-/// Store the session blob, encrypted, replacing any previous one.
+/// Store the session blob, sealed for its owner, replacing any previous one.
+///
+/// The write always lands at [`CURRENT_KEY_VERSION`], which is what makes a
+/// re-pair after the deploy carry the per-account derivation.
 pub async fn save_session(
     pool: &PgPool,
     connector_id: Uuid,
@@ -226,32 +201,60 @@ pub async fn save_session(
     cipher: &SessionCipher,
     session: &[u8],
 ) -> Result<(), AppError> {
-    let ciphertext = cipher.seal(session)?;
+    let ciphertext = cipher.seal(user_id, session)?;
     sqlx::query(
-        "INSERT INTO connector_secrets (connector_id, user_id, ciphertext) VALUES ($1, $2, $3) \
+        "INSERT INTO connector_secrets (connector_id, user_id, ciphertext, key_version) \
+         VALUES ($1, $2, $3, $4) \
          ON CONFLICT (connector_id) DO UPDATE \
-         SET ciphertext = EXCLUDED.ciphertext, user_id = EXCLUDED.user_id",
+         SET ciphertext = EXCLUDED.ciphertext, user_id = EXCLUDED.user_id, \
+             key_version = EXCLUDED.key_version",
     )
     .bind(connector_id)
     .bind(user_id)
     .bind(ciphertext)
+    .bind(CURRENT_KEY_VERSION)
     .execute(pool)
     .await?;
     Ok(())
 }
 
-/// Read back the session blob, decrypted.
+/// Read back the session blob, decrypted, upgrading a legacy row in place.
+///
+/// The row's own `user_id` decides the derivation, so the reopen path after a
+/// restart cannot be talked into opening another account's session.
 pub async fn load_session(
     pool: &PgPool,
     connector_id: Uuid,
     cipher: &SessionCipher,
 ) -> Result<Option<Vec<u8>>, AppError> {
-    let stored: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT ciphertext FROM connector_secrets WHERE connector_id = $1")
-            .bind(connector_id)
-            .fetch_optional(pool)
-            .await?;
-    stored.map(|bytes| cipher.open(&bytes)).transpose()
+    let stored: Option<(Uuid, Vec<u8>, i16)> = sqlx::query_as(
+        "SELECT user_id, ciphertext, key_version FROM connector_secrets \
+          WHERE connector_id = $1",
+    )
+    .bind(connector_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((user_id, blob, key_version)) = stored else {
+        return Ok(None);
+    };
+    let opened = cipher.open(user_id, key_version, &blob)?;
+
+    if let Some(upgraded) = opened.upgraded {
+        sqlx::query(
+            "UPDATE connector_secrets SET ciphertext = $3, key_version = $4 \
+              WHERE connector_id = $1 AND user_id = $2 AND key_version = $5",
+        )
+        .bind(connector_id)
+        .bind(user_id)
+        .bind(upgraded)
+        .bind(CURRENT_KEY_VERSION)
+        .bind(key_version)
+        .execute(pool)
+        .await?;
+    }
+
+    Ok(Some(opened.plaintext))
 }
 
 /// Forget the session: called when the device is unlinked or the phone logs us out.
@@ -497,40 +500,72 @@ async fn ensure_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::secrets::KEY_VERSION_PER_USER;
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as BASE64;
 
     fn cipher() -> SessionCipher {
         SessionCipher::from_bytes(&[7u8; 32]).expect("32-byte key")
+    }
+
+    fn owner() -> Uuid {
+        Uuid::from_u128(7)
     }
 
     #[test]
     fn session_round_trips_through_the_cipher() {
         let cipher = cipher();
         let plaintext = b"device keys and pre-keys".to_vec();
-        let sealed = cipher.seal(&plaintext).expect("seals");
+        let sealed = cipher.seal(owner(), &plaintext).expect("seals");
         assert_ne!(sealed, plaintext, "ciphertext must not be the plaintext");
-        assert_eq!(&sealed[..NONCE_BYTES], &sealed[..NONCE_BYTES]);
-        assert_eq!(cipher.open(&sealed).expect("opens"), plaintext);
+        let opened = cipher
+            .open(owner(), KEY_VERSION_PER_USER, &sealed)
+            .expect("opens");
+        assert_eq!(opened.plaintext, plaintext);
+        assert!(
+            opened.upgraded.is_none(),
+            "a fresh write is already at the current version"
+        );
     }
 
     #[test]
     fn sealing_twice_uses_a_fresh_nonce() {
         let cipher = cipher();
-        let first = cipher.seal(b"same plaintext").expect("seals");
-        let second = cipher.seal(b"same plaintext").expect("seals");
+        let first = cipher.seal(owner(), b"same plaintext").expect("seals");
+        let second = cipher.seal(owner(), b"same plaintext").expect("seals");
         assert_ne!(first, second, "a reused nonce would leak the plaintext");
     }
 
     #[test]
+    fn a_foreign_account_cannot_open_the_session() {
+        let sealed = cipher().seal(owner(), b"session").expect("seals");
+        assert!(
+            cipher()
+                .open(Uuid::from_u128(8), KEY_VERSION_PER_USER, &sealed)
+                .is_err(),
+            "a session sealed for one account must not open for another"
+        );
+    }
+
+    #[test]
     fn wrong_key_or_tampering_fails_closed() {
-        let sealed = cipher().seal(b"session").expect("seals");
+        let sealed = cipher().seal(owner(), b"session").expect("seals");
         let other = SessionCipher::from_bytes(&[9u8; 32]).expect("32-byte key");
-        assert!(other.open(&sealed).is_err());
+        assert!(other.open(owner(), KEY_VERSION_PER_USER, &sealed).is_err());
 
         let mut tampered = sealed.clone();
         let last = tampered.len() - 1;
         tampered[last] ^= 0xff;
-        assert!(cipher().open(&tampered).is_err());
-        assert!(cipher().open(&[0u8; 4]).is_err());
+        assert!(
+            cipher()
+                .open(owner(), KEY_VERSION_PER_USER, &tampered)
+                .is_err()
+        );
+        assert!(
+            cipher()
+                .open(owner(), KEY_VERSION_PER_USER, &[0u8; 4])
+                .is_err()
+        );
     }
 
     #[test]
