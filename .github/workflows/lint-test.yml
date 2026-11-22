@@ -152,6 +152,14 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test links
 
+      # C2: these suites seed `connector_secrets` and read the token back
+      # through the per-account derivation, so the v2 write path and the
+      # `key_version` column are exercised against real rows, not mocks.
+      - name: Run the connector secret acceptance tests
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --test connector_registry --test photos_picker
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest
