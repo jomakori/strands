@@ -6,6 +6,7 @@
 //! writes for allowlisted chats alone.
 
 pub mod bridge;
+pub mod history;
 pub mod live;
 pub mod qr;
 pub mod store;
