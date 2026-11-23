@@ -19,6 +19,7 @@ use crate::auth::IdentityProvider;
 use crate::auth::routes::routes as auth_routes;
 use crate::config::AuthConfig;
 use crate::connectors::routes as connector_routes;
+use crate::demo::DemoAccount;
 use crate::gmaps::places::{PlaceResolver, UnconfiguredResolver};
 use crate::gmaps::routes as gmaps_routes;
 use crate::ingest::routes as ingest_routes;
@@ -42,6 +43,10 @@ use strands_connector_photos::{PickerApi, UnconfiguredPicker};
 pub struct AppState {
     pub pool: PgPool,
     pub auth: AuthConfig,
+    /// Staging demo mode (ticket C3): `Some` only when this process was started
+    /// with `STRANDS_DEMO_MODE=1`, in which case every request resolves to this
+    /// account. Production boots with `None`, which is the pre-C3 behaviour.
+    pub demo: Option<DemoAccount>,
     /// `dyn` so production can use Google and tests a fake, without generics
     /// leaking into every handler signature.
     pub identity: Arc<dyn IdentityProvider>,
@@ -95,6 +100,7 @@ impl AppState {
         Self {
             pool,
             auth,
+            demo: None,
             identity,
             registry,
             summarizer,
@@ -113,6 +119,12 @@ impl AppState {
     /// `None` is a deliberate state, not an error: the API stands on its own.
     pub fn with_assets(mut self, assets: Option<Assets>) -> Self {
         self.assets = assets;
+        self
+    }
+
+    /// Resolve every request to the demo account (ticket C3, staging only).
+    pub fn with_demo(mut self, demo: DemoAccount) -> Self {
+        self.demo = Some(demo);
         self
     }
 
