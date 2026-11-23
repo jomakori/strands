@@ -66,6 +66,16 @@ const HISTORY = {
   runs: [{ imported_at: "2026-11-20T18:04:00Z", imported: 3, skipped: 0 }],
 };
 
+// A freshly linked phone that has not pushed any history yet: no chats at all.
+const WHATSAPP_NO_CHATS = {
+  state: { state: "linked" },
+  disclosure: "Unofficial WhatsApp link.",
+  allowlist: [],
+  chats: [],
+  last_sync_at: null,
+  last_error: null,
+};
+
 function importResult(keys: string[]) {
   return {
     results: keys.map((key) => ({ item_key: key, outcome: "imported" })),
@@ -78,6 +88,7 @@ function importResult(keys: string[]) {
 type Stub = {
   preview?: unknown;
   onImport?: (keys: string[]) => unknown;
+  whatsapp?: unknown;
 };
 
 async function stubApi(page: Page, stub: Stub = {}) {
@@ -97,6 +108,13 @@ async function stubApi(page: Page, stub: Stub = {}) {
         status: 200,
         contentType: "application/json",
         body: JSON.stringify([MAPS_ROW]),
+      });
+    }
+    if (path === "/api/v1/whatsapp") {
+      return route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(stub.whatsapp ?? WHATSAPP_NO_CHATS),
       });
     }
     if (path.endsWith("/preview")) {
@@ -130,9 +148,9 @@ async function stubApi(page: Page, stub: Stub = {}) {
   });
 }
 
-async function openWizard(page: Page) {
-  await page.goto("/connectors/google-maps/import");
-  await expect(page.locator("#import-title")).toHaveText("Import from google-maps");
+async function openWizard(page: Page, connectorId = "google-maps") {
+  await page.goto(`/connectors/${connectorId}/import`);
+  await expect(page.locator("#import-title")).toHaveText(`Import from ${connectorId}`);
   await awaitSplashGone(page);
 }
 
@@ -277,5 +295,28 @@ test.describe("import wizard", () => {
       "Everything here is already imported.",
     );
     await expect(page.locator(card)).toHaveCount(0);
+  });
+
+  test("a WhatsApp picker with no chats says the history has not synced yet, and import stays disabled", async ({
+    page,
+  }, testInfo) => {
+    await stubApi(page, { whatsapp: WHATSAPP_NO_CHATS });
+    await openWizard(page, "whatsapp");
+
+    const body = page.locator("body");
+    await expect(page.locator('[data-testid="import-zero-chats"]')).toBeVisible();
+    await expect(body).toContainText("WhatsApp history has not synced yet.");
+    await expect(body).toContainText("Chats appear here as the sync arrives");
+    await expect(body).not.toContainText("Imported 0 notes from 0 chats");
+    await expect(body).not.toContainText("Could not load candidates");
+
+    await expect(page.locator(card)).toHaveCount(0);
+    await expect(page.locator(submit)).toBeDisabled();
+    await expect(page.locator(summary)).toHaveText("Importing 0 of 0 strands");
+
+    await page.screenshot({
+      path: `captures/${testInfo.project.name}-import-whatsapp-zero-chats.png`,
+      fullPage: true,
+    });
   });
 });

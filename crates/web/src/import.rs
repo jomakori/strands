@@ -137,6 +137,9 @@ enum Step {
     Review { container: Option<String> },
 }
 
+/// The connector id whose items arrive by sync rather than by preview.
+const WHATSAPP_CONNECTOR: &str = "whatsapp";
+
 /// The whole wizard: `/connectors/:id/import`.
 #[component]
 pub fn ImportWizard(id: String) -> Element {
@@ -150,7 +153,34 @@ pub fn ImportWizard(id: String) -> Element {
         }
     });
 
+    // A3: WhatsApp previews nothing — its candidates are whatever the phone has
+    // already pushed — so at zero chats the picker has an honest answer of its
+    // own instead of a preview failure: history has not synced yet. The probe
+    // reads the chat snapshot, and it asks once per mount for WhatsApp only, so
+    // every other connector keeps the preview path below untouched, and so does
+    // WhatsApp as soon as chats exist.
+    let probe_id = id.clone();
+    let phone = use_resource(move || {
+        let connector_id = probe_id.clone();
+        async move {
+            if connector_id != WHATSAPP_CONNECTOR {
+                return None;
+            }
+            Some(api::whatsapp_status().await)
+        }
+    });
+
     let mut step = use_signal(|| Step::Containers);
+
+    // The probe above is only an answer for WhatsApp: for every other connector
+    // it resolves to `Some(None)` and these stay false, so the preview path runs
+    // exactly as before.
+    let probing = id == WHATSAPP_CONNECTOR && phone.read().is_none();
+    let zero_chat_phone = id == WHATSAPP_CONNECTOR
+        && match &*phone.read() {
+            Some(Some(Ok(status))) => status.chats.is_empty(),
+            _ => false,
+        };
 
     rsx! {
         div { class: "app",
@@ -162,65 +192,101 @@ pub fn ImportWizard(id: String) -> Element {
             main { class: "feed", "aria-label": "Import from {id}",
                 div { class: "feed-inner",
                     h1 { class: "name", id: "import-title", "Import from {id}" }
-                    match &*preview.read() {
-                        None => rsx! { Skeleton { lines: 4, label: "Loading candidates…" } },
-                        Some(Err(error)) => rsx! {
-                            RetryNotice {
-                                message: format!("Could not load candidates: {}", state::describe(error)),
-                                onretry: move |_| attempt += 1,
-                            }
-                        },
-                        Some(Ok(preview)) => {
-                            let candidates: Vec<Candidate> = preview
-                                .items
-                                .iter()
-                                .map(|item| {
-                                    let (kind, container) = classify(&item.item_key);
-                                    Candidate {
-                                        item_key: item.item_key.clone(),
-                                        label: item.label.clone(),
-                                        kind,
-                                        container,
-                                        already_imported: item.already_imported,
-                                    }
-                                })
-                                .collect();
-
-                            if candidates.is_empty() {
-                                rsx! {
-                                    EmptyNotice {
-                                        title: "No candidates to import.".to_owned(),
-                                        hint: "This connector has nothing new to bring in right now.".to_owned(),
-                                    }
+                    if probing {
+                        Skeleton { lines: 4, label: "Loading candidates…" }
+                    } else if zero_chat_phone {
+                        ZeroChatPicker {}
+                    } else {
+                        match &*preview.read() {
+                            None => rsx! { Skeleton { lines: 4, label: "Loading candidates…" } },
+                            Some(Err(error)) => rsx! {
+                                RetryNotice {
+                                    message: format!("Could not load candidates: {}", state::describe(error)),
+                                    onretry: move |_| attempt += 1,
                                 }
-                            } else if candidates.iter().all(|candidate| candidate.already_imported) {
-                                rsx! {
-                                    EmptyNotice {
-                                        title: "Everything here is already imported.".to_owned(),
-                                        hint: "Check back once this connector sees something new.".to_owned(),
-                                    }
-                                }
-                            } else {
-                                match step() {
-                                    Step::Containers => rsx! {
-                                        ContainerStep {
-                                            candidates: candidates.clone(),
-                                            onselect: move |container: Option<String>| step.set(Step::Review { container }),
-                                        }
-                                    },
-                                    Step::Review { container } => rsx! {
-                                        ReviewStep {
-                                            connector_id: id.clone(),
-                                            all_candidates: candidates.clone(),
+                            },
+                            Some(Ok(preview)) => {
+                                let candidates: Vec<Candidate> = preview
+                                    .items
+                                    .iter()
+                                    .map(|item| {
+                                        let (kind, container) = classify(&item.item_key);
+                                        Candidate {
+                                            item_key: item.item_key.clone(),
+                                            label: item.label.clone(),
+                                            kind,
                                             container,
-                                            onback: move |_| step.set(Step::Containers),
-                                            onimported: move |_| attempt += 1,
+                                            already_imported: item.already_imported,
                                         }
-                                    },
+                                    })
+                                    .collect();
+
+                                if candidates.is_empty() {
+                                    rsx! {
+                                        EmptyNotice {
+                                            title: "No candidates to import.".to_owned(),
+                                            hint: "This connector has nothing new to bring in right now.".to_owned(),
+                                        }
+                                    }
+                                } else if candidates.iter().all(|candidate| candidate.already_imported) {
+                                    rsx! {
+                                        EmptyNotice {
+                                            title: "Everything here is already imported.".to_owned(),
+                                            hint: "Check back once this connector sees something new.".to_owned(),
+                                        }
+                                    }
+                                } else {
+                                    match step() {
+                                        Step::Containers => rsx! {
+                                            ContainerStep {
+                                                candidates: candidates.clone(),
+                                                onselect: move |container: Option<String>| step.set(Step::Review { container }),
+                                            }
+                                        },
+                                        Step::Review { container } => rsx! {
+                                            ReviewStep {
+                                                connector_id: id.clone(),
+                                                all_candidates: candidates.clone(),
+                                                container,
+                                                onback: move |_| step.set(Step::Containers),
+                                                onimported: move |_| attempt += 1,
+                                            }
+                                        },
+                                    }
                                 }
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+/// Screen 0: the picker for a connector whose items arrive by sync, with no
+/// chats to show yet (A3).
+///
+/// History has not been pushed from the phone, so there is no candidate list to
+/// filter and nothing an import could run on: the reason goes on screen and the
+/// action stays visibly unavailable rather than failing when pressed.
+#[component]
+fn ZeroChatPicker() -> Element {
+    rsx! {
+        div { class: "import-zero-chats", "data-testid": "import-zero-chats",
+            EmptyNotice {
+                title: state::WHATSAPP_ZERO_CHAT_TITLE.to_owned(),
+                hint: state::WHATSAPP_ZERO_CHAT_HINT.to_owned(),
+            }
+            footer { class: "import-footer",
+                p { class: "import-summary", id: "import-summary", "aria-live": "polite",
+                    "Importing 0 of 0 strands"
+                }
+                button {
+                    class: "button button-primary",
+                    r#type: "button",
+                    "data-testid": "import-submit",
+                    disabled: true,
+                    "Import"
                 }
             }
         }

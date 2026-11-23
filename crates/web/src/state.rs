@@ -38,6 +38,21 @@ pub fn RetryNotice(message: String, onretry: EventHandler<MouseEvent>) -> Elemen
     }
 }
 
+/// Why a WhatsApp surface is empty at zero chats (A3).
+///
+/// A fresh link reports no chats until the phone pushes its history, so the
+/// honest answer is the reason — not a preview failure and not a receipt that
+/// counts zeroes. Both the import picker and the Settings row read these, so the
+/// two cannot drift apart.
+pub const WHATSAPP_ZERO_CHAT_TITLE: &str = "WhatsApp history has not synced yet.";
+pub const WHATSAPP_ZERO_CHAT_HINT: &str = "Chats appear here as the sync arrives; reopen this screen once the phone has sent its history.";
+/// The same reason as one line, for a receipt that would otherwise read
+/// `Imported 0 notes from 0 chats`.
+pub const WHATSAPP_ZERO_CHAT_LINE: &str = "WhatsApp history has not synced yet, so there is nothing to import. Chats appear as the sync arrives.";
+/// The row's chat count when the phone has reported no chats at all.
+pub const WHATSAPP_ZERO_CHAT_META: &str =
+    "No chats on the phone yet — history has not synced. Chats appear here as the sync arrives.";
+
 /// Nothing to show, and why that is not a failure.
 #[component]
 pub fn EmptyNotice(title: String, hint: String) -> Element {

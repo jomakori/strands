@@ -15,7 +15,8 @@
 
 use dioxus::prelude::*;
 use strands_api_types::{
-    ConnectorStatus, ConnectorSummary, WHATSAPP_DISCLOSURE, WhatsAppLinkState, WhatsAppStatus,
+    ConnectorStatus, ConnectorSummary, WHATSAPP_DISCLOSURE, WhatsAppImportReport,
+    WhatsAppLinkState, WhatsAppStatus,
 };
 
 use crate::api;
@@ -27,6 +28,23 @@ use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 /// fast enough that scanning a QR feels immediate, slow enough that an idle
 /// settings tab is not a request stream.
 const WHATSAPP_POLL: u32 = 2_000;
+
+/// What a sync that had chats to look at reports: counts, plus the attachments
+/// it had to skip. Zero-chat syncs never reach this — they answer with the reason
+/// the picker is empty instead (A3).
+fn imported_line(report: &WhatsAppImportReport) -> String {
+    let mut line = format!(
+        "Imported {} notes from {} chats ({} chats not allowed).",
+        report.notes_created, report.chats_imported, report.chats_skipped
+    );
+    if report.media_skipped > 0 {
+        line.push_str(&format!(
+            " {} attachments had no caption and were skipped.",
+            report.media_skipped
+        ));
+    }
+    line
+}
 
 /// The whole settings screen: a back link, then the connector list.
 #[component]
@@ -241,8 +259,17 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
             }
 
             if let Some(status) = snapshot.as_ref() {
-                p { class: "whatsapp-meta whatsapp-muted",
-                    "{status.chats.len()} chats on the phone · {status.allowlist.len()} allowed · last sync: {last_sync}"
+                if status.chats.is_empty() {
+                    // A3: zero chats means the phone has not pushed its history
+                    // yet, so the count is not "0 chats" but the reason there are
+                    // none — the same words the import picker uses.
+                    p { class: "whatsapp-meta whatsapp-muted", "data-whatsapp-chats": "0",
+                        "{state::WHATSAPP_ZERO_CHAT_META} · {status.allowlist.len()} allowed · last sync: {last_sync}"
+                    }
+                } else {
+                    p { class: "whatsapp-meta whatsapp-muted",
+                        "{status.chats.len()} chats on the phone · {status.allowlist.len()} allowed · last sync: {last_sync}"
+                    }
                 }
             }
 
@@ -267,16 +294,25 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
                                     match api::whatsapp_sync().await {
                                         Ok(report) => {
                                             error.set(None);
-                                            let mut line = format!(
-                                                "Imported {} notes from {} chats ({} chats not allowed).",
-                                                report.notes_created, report.chats_imported, report.chats_skipped
-                                            );
-                                            if report.media_skipped > 0 {
-                                                line.push_str(&format!(
-                                                    " {} attachments had no caption and were skipped.",
-                                                    report.media_skipped
-                                                ));
-                                            }
+                                            // A3: a sync may be what makes the
+                                            // history arrive, so the receipt is
+                                            // read off the refreshed snapshot. No
+                                            // chats means there was nothing to
+                                            // count — the answer is why, not
+                                            // "Imported 0 notes from 0 chats".
+                                            let line = match api::whatsapp_status().await {
+                                                Ok(status) => {
+                                                    error.set(status.last_error.clone());
+                                                    let no_chats = status.chats.is_empty();
+                                                    link.set(Some(status));
+                                                    if no_chats {
+                                                        state::WHATSAPP_ZERO_CHAT_LINE.to_owned()
+                                                    } else {
+                                                        imported_line(&report)
+                                                    }
+                                                }
+                                                Err(_) => imported_line(&report),
+                                            };
                                             notice.set(Some(line));
                                         }
                                         Err(failure) => error.set(Some(format!("Sync failed: {failure}"))),
