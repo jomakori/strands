@@ -38,7 +38,9 @@ jobs:
     env:
       IMAGE: ghcr.io/jomakori/strands
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # A PAT, not GITHUB_TOKEN: GitHub suppresses `labeled`/`unlabeled` events
+      # raised with the repository's own token, and staging-pin deploys on them.
+      GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
     steps:
       - name: Check out the merge commit the image is built from
         uses: actions/checkout@v7
@@ -134,7 +136,7 @@ jobs:
       issues: write
     env:
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.GITOPS_TOKEN }}
     steps:
       - name: Remove the preview label
         run: |
