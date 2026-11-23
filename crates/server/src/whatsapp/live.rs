@@ -482,6 +482,8 @@ impl SessionFactory for LiveFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use whatsapp_rust::bytes::Bytes;
+    use whatsapp_rust::wacore::history_sync::MAX_DECOMPRESSED;
 
     fn jid(raw: &str) -> Jid {
         Jid::parse(raw).expect("test jid parses")
@@ -595,6 +597,136 @@ mod tests {
             shared.buffer.lock().expect("inbox is never poisoned").len(),
             1
         );
+    }
+
+    /// A zlib-compressed `HistorySync` whose 1:1 chat carries the same `key.id`
+    /// twice under two different `msgOrderId`s, plus a second message and a
+    /// group. Generated, so the merge rules are exercised without a device.
+    const DEDUPE_FIXTURE: &[u8] =
+        include_bytes!("../../tests/fixtures/whatsapp_history_dedupe_and_wall_clock.bin");
+
+    /// The fixture's wall clock on the wire, in unix seconds:
+    /// 1_700_000_300 == 2023-11-14T22:18:20Z.
+    const CHAT_ACTIVITY: i64 = 1_700_000_300;
+
+    /// Drain the fixture afresh. A re-delivered chunk is the same bytes pushed
+    /// again, so calling this twice is what a resync really looks like.
+    fn chunk() -> history::Chunk {
+        history::drain(&LazyHistorySync::new(
+            Bytes::from_static(DEDUPE_FIXTURE),
+            MAX_DECOMPRESSED as usize,
+            0, // INITIAL_BOOTSTRAP
+            None,
+            None,
+        ))
+    }
+
+    // The dedupe and wall-clock contract is proven here rather than in
+    // `history` because the collapse happens in `merge`/`append`: these call
+    // the same functions the event handler calls, on bytes a phone would push.
+
+    #[test]
+    fn a_second_merge_of_the_same_chunk_adds_no_chats_or_notes() {
+        let shared = Shared::new(LinkState::Linked);
+
+        let first = shared.merge(chunk());
+        let chats_after_first = shared
+            .chats
+            .lock()
+            .expect("chat map is never poisoned")
+            .len();
+        let notes_after_first = shared.buffer.lock().expect("inbox is never poisoned").len();
+
+        assert_eq!(chats_after_first, 2, "a 1:1 chat and a group");
+        assert_eq!(
+            notes_after_first, 3,
+            "four entries, one of them a repeated id"
+        );
+        assert_eq!(
+            first.buffered, notes_after_first,
+            "every drained message became a buffered note"
+        );
+        assert_eq!(first.evicted, 0);
+
+        // The phone pushes the same conversation list again.
+        let second = shared.merge(chunk());
+
+        assert_eq!(second.buffered, 0, "a resync imports nothing new");
+        assert_eq!(second.evicted, 0);
+        assert_eq!(
+            shared
+                .chats
+                .lock()
+                .expect("chat map is never poisoned")
+                .len(),
+            chats_after_first,
+            "the chat count is unchanged"
+        );
+        assert_eq!(
+            shared.buffer.lock().expect("inbox is never poisoned").len(),
+            notes_after_first,
+            "the note count is unchanged"
+        );
+    }
+
+    #[test]
+    fn dedupe_ignores_msg_order_id() {
+        let drained = chunk();
+        // The chunk really does carry two entries for one `key.id`; the
+        // fixture gives them different `msgOrderId`s, which the drain keeps as
+        // separate entries because order is not identity.
+        assert_eq!(
+            drained
+                .messages
+                .iter()
+                .filter(|message| message.message_id == "3A1")
+                .count(),
+            2,
+            "the same id arrives twice under two order ids"
+        );
+        assert_eq!(drained.messages.len(), 4);
+
+        let shared = Shared::new(LinkState::Linked);
+        shared.merge(drained);
+
+        let buffer = shared.buffer.lock().expect("inbox is never poisoned");
+        let kept: Vec<&BufferedMessage> = buffer
+            .iter()
+            .filter(|message| message.message_id == "3A1")
+            .collect();
+        assert_eq!(
+            kept.len(),
+            1,
+            "one id collapses to one note, whatever the msgOrderId"
+        );
+        assert_eq!(kept[0].body, "handshake one");
+        assert_eq!(buffer.len(), 3, "the other ids are untouched");
+    }
+
+    #[test]
+    fn history_note_keeps_wall_clock() {
+        let shared = Shared::new(LinkState::Linked);
+        shared.merge(chunk());
+
+        let buffer = shared.buffer.lock().expect("inbox is never poisoned");
+        let note = buffer
+            .iter()
+            .find(|message| message.message_id == "3A1")
+            .expect("the merged note is buffered");
+        let wall_clock =
+            DateTime::from_timestamp_millis(CHAT_ACTIVITY * 1_000).expect("a real instant");
+
+        assert_eq!(
+            note.sent_at, wall_clock,
+            "the wire stamp is seconds, so the note keeps the chunk's wall clock"
+        );
+        assert_eq!(note.sent_at.timestamp(), CHAT_ACTIVITY);
+        assert_eq!(
+            note.sent_at.format("%Y").to_string(),
+            "2023",
+            "seconds read as millis would date the note to 1970"
+        );
+        assert_ne!(note.sent_at.timestamp(), 0, "not the unix epoch");
     }
 
     #[test]
