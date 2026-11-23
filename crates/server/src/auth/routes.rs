@@ -48,6 +48,27 @@ pub async fn start(
     State(state): State<AppState>,
     Query(query): Query<StartQuery>,
 ) -> Result<Response, AppError> {
+    // Staging demo mode (ticket C3): there is no provider to redirect to, so the
+    // seeded demo session is issued here and the visitor continues to the route
+    // they asked for. `/api/v1/me` already answers without a cookie; setting one
+    // keeps the browser's own state in step with the seeded session row.
+    if let Some(demo) = state.demo {
+        let ttl = Duration::days(state.auth.session_ttl_days);
+        let cookie = session_cookie(demo.session_id, ttl, state.auth.cookie_secure, Utc::now());
+        let return_to = query
+            .next
+            .as_deref()
+            .and_then(safe_return_path)
+            .unwrap_or_else(|| "/".to_owned());
+
+        let mut response = Redirect::to(&return_to).into_response();
+        *response.status_mut() = StatusCode::SEE_OTHER;
+        response
+            .headers_mut()
+            .append(header::SET_COOKIE, cookie_header(cookie));
+        return Ok(response);
+    }
+
     let state_token = random_token();
     let code_verifier = random_token();
     let nonce = random_token();
@@ -178,7 +199,11 @@ pub async fn logout(
     headers: HeaderMap,
 ) -> Result<Response, AppError> {
     if let Some(session_id) = session_id_from_headers(&headers) {
-        store::delete_session(&state.pool, session_id).await?;
+        // Demo mode has one seeded session and no way to sign back in, so the
+        // cookie is cleared but the row is kept (ticket C3).
+        if state.demo.is_none() {
+            store::delete_session(&state.pool, session_id).await?;
+        }
     }
 
     Ok((

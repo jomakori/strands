@@ -32,6 +32,17 @@ impl FromRequestParts<AppState> for CurrentUser {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        // Staging demo mode (ticket C3): the process was started with
+        // STRANDS_DEMO_MODE=1, so every request is the demo account. Production
+        // cannot reach this branch — the config refuses to boot there — and the
+        // check comes before the cookie so a demo visitor needs no login at all.
+        if let Some(demo) = state.demo {
+            return Ok(Self {
+                id: demo.user_id,
+                session_id: demo.session_id,
+            });
+        }
+
         let session_id =
             session_id_from_headers(&parts.headers).ok_or(AppError::Unauthenticated)?;
 

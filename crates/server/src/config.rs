@@ -42,6 +42,15 @@ pub enum ConfigError {
     Missing(&'static str),
     #[error("environment variable {name} is not a valid value: {value}")]
     Invalid { name: &'static str, value: String },
+    /// `STRANDS_DEMO_MODE` was requested while a production marker is present
+    /// (ticket C3). See [`crate::demo::refusal`] for what counts as one.
+    #[error(
+        "{demo_env} is set, but this process is configured as production: {reason}. \
+         Demo mode answers every request as one fixed account and seeds sample content into it, \
+         so it must never run against production data — unset {demo_env} or run it on staging",
+        demo_env = crate::demo::DEMO_ENV
+    )]
+    DemoInProduction { reason: String },
 }
 
 impl AuthConfig {
@@ -59,8 +68,23 @@ impl AuthConfig {
     /// (`std::env::set_var` is `unsafe` in edition 2024, and a test that sets it
     /// races every other test in the binary).
     pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
-        let issuer = required(&lookup, "OIDC_ISSUER")?;
-        let issuer = issuer.trim_end_matches('/').to_owned();
+        let public_base_url = optional(&lookup, "PUBLIC_BASE_URL")
+            .unwrap_or_else(|| DEFAULT_PUBLIC_BASE_URL.to_owned());
+        let public_base_url = public_base_url.trim_end_matches('/').to_owned();
+
+        // Staging demo mode (ticket C3) is the one configuration in which the
+        // OIDC variables may be absent; it is also refused wherever this process
+        // looks like production, so the switch cannot widen staging's reach.
+        let demo = crate::demo::requested(&lookup);
+        if demo && let Some(reason) = crate::demo::refusal(&lookup, &public_base_url) {
+            return Err(ConfigError::DemoInProduction { reason });
+        }
+
+        let issuer = match optional(&lookup, "OIDC_ISSUER") {
+            Some(issuer) => issuer.trim_end_matches('/').to_owned(),
+            None if demo => crate::demo::DEMO_ISSUER.to_owned(),
+            None => return Err(ConfigError::Missing("OIDC_ISSUER")),
+        };
 
         // Discovery is a URL join, so a scheme-less host would turn into a
         // request for `dex.example/...` that fails only at the first login.
@@ -72,11 +96,11 @@ impl AuthConfig {
             });
         }
 
-        let client_id = required(&lookup, "OIDC_CLIENT_ID")?;
-
-        let public_base_url = optional(&lookup, "PUBLIC_BASE_URL")
-            .unwrap_or_else(|| DEFAULT_PUBLIC_BASE_URL.to_owned());
-        let public_base_url = public_base_url.trim_end_matches('/').to_owned();
+        let client_id = match optional(&lookup, "OIDC_CLIENT_ID") {
+            Some(client_id) => client_id,
+            None if demo => crate::demo::DEMO_CLIENT_ID.to_owned(),
+            None => return Err(ConfigError::Missing("OIDC_CLIENT_ID")),
+        };
 
         let cookie_secure = match optional(&lookup, "SESSION_COOKIE_SECURE") {
             Some(value) => parse_bool("SESSION_COOKIE_SECURE", &value)?,
@@ -116,13 +140,6 @@ impl AuthConfig {
     pub fn discovery_url(&self) -> String {
         format!("{}/.well-known/openid-configuration", self.issuer)
     }
-}
-
-fn required(
-    lookup: &impl Fn(&str) -> Option<String>,
-    name: &'static str,
-) -> Result<String, ConfigError> {
-    optional(lookup, name).ok_or(ConfigError::Missing(name))
 }
 
 fn optional(lookup: &impl Fn(&str) -> Option<String>, name: &str) -> Option<String> {

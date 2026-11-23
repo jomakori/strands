@@ -11,6 +11,7 @@ pub mod build_info;
 pub mod config;
 pub mod connectors;
 pub mod db;
+pub mod demo;
 pub mod error;
 pub mod gmaps;
 pub mod ingest;

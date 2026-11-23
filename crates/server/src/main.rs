@@ -6,10 +6,12 @@ use std::sync::Arc;
 
 use strands_connector_photos::GooglePicker;
 use strands_server::app::{AppState, router};
+use strands_server::auth::IdentityProvider;
 use strands_server::auth::identity::OidcIdentityProvider;
-use strands_server::config::AuthConfig;
+use strands_server::config::{AuthConfig, ConfigError};
 use strands_server::connectors::{build_registry, dev_connectors_enabled};
 use strands_server::db;
+use strands_server::demo::{self, DemoIdentityProvider};
 use strands_server::gmaps::places::PlacesApiResolver;
 use strands_server::links::LiteLlmJudge;
 use strands_server::llm::LiteLlmClient;
@@ -29,27 +31,60 @@ async fn main() {
         .with_target(true)
         .init();
 
+    // Auth config is resolved before the database is touched: with
+    // `STRANDS_DEMO_MODE` set on a production-shaped deployment this is the
+    // guard that refuses to start (ticket C3), and it has to fire before the
+    // process opens a connection to real data.
+    let auth = match AuthConfig::from_env() {
+        Ok(auth) => auth,
+        Err(error @ ConfigError::DemoInProduction { .. }) => {
+            eprintln!("strands: refusing to start: {error}");
+            std::process::exit(1);
+        }
+        Err(_) => panic!("OIDC_ISSUER and OIDC_CLIENT_ID must be set (see README)"),
+    };
+    let demo_requested = demo::requested(&|name: &str| std::env::var(name).ok());
+
     let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
     let pool = db::connect_and_migrate(&database_url)
         .await
         .expect("connect to Postgres and apply migrations");
 
+    // Staging demo mode: the account and its content are seeded once (every
+    // insert is idempotent), and no OIDC provider is constructed at all.
+    let demo_account = if demo_requested {
+        let account = demo::seed(&pool).await.expect("seed the demo account");
+        eprintln!(
+            "strands: {} is set — every request resolves to the demo account {}; \
+             OIDC is not used",
+            demo::DEMO_ENV,
+            account.user_id,
+        );
+        Some(account)
+    } else {
+        None
+    };
+
     // Fail at boot, not on the first login: config errors and an unreachable
     // issuer are deployment mistakes, and the process should never appear
     // healthy without the settings its only auth flow needs. There is no client
     // secret to require — the app is a public Dex client (see README).
-    let auth =
-        AuthConfig::from_env().expect("OIDC_ISSUER and OIDC_CLIENT_ID must be set (see README)");
-    let identity = OidcIdentityProvider::discover(&auth)
-        .await
-        .unwrap_or_else(|error| panic!("discover OIDC endpoints: {error}"));
-    eprintln!(
-        "strands: OIDC issuer {} → authorize {}, token {}, userinfo {}",
-        auth.issuer,
-        identity.endpoints().authorization,
-        identity.endpoints().token,
-        identity.endpoints().userinfo,
-    );
+    let identity: Arc<dyn IdentityProvider> = match demo_account {
+        Some(_) => Arc::new(DemoIdentityProvider::new()),
+        None => {
+            let provider = OidcIdentityProvider::discover(&auth)
+                .await
+                .unwrap_or_else(|error| panic!("discover OIDC endpoints: {error}"));
+            eprintln!(
+                "strands: OIDC issuer {} → authorize {}, token {}, userinfo {}",
+                auth.issuer,
+                provider.endpoints().authorization,
+                provider.endpoints().token,
+                provider.endpoints().userinfo,
+            );
+            Arc::new(provider)
+        }
+    };
 
     // Without the sealing key, stored connector tokens cannot be opened, so a
     // pick could never start. Resolve it before the registry so the Photos
@@ -116,12 +151,18 @@ async fn main() {
     let state = AppState::new(
         pool,
         auth,
-        Arc::new(identity),
+        identity,
         Arc::new(registry),
         Arc::new(summarizer),
     )
     .with_tagger(Arc::new(tagger))
     .with_judge(Arc::new(judge));
+
+    // Staging demo mode: every request is the seeded account (ticket C3).
+    let state = match demo_account {
+        Some(account) => state.with_demo(account),
+        None => state,
+    };
 
     // Place enrichment is optional where auth and the LLM are not: without a
     // key the import still works and marks every row unresolved, which is the
@@ -179,8 +220,12 @@ async fn main() {
         Err(error) => panic!("serve the web bundle: {error}"),
     };
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080")
+    // Default is the deployed contract; `STRANDS_BIND_ADDR` exists so a test can
+    // run the real binary next to whatever else is on 8080.
+    let bind_addr =
+        std::env::var("STRANDS_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8080".to_owned());
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
-        .expect("bind 0.0.0.0:8080");
+        .unwrap_or_else(|error| panic!("bind {bind_addr}: {error}"));
     axum::serve(listener, router(state)).await.expect("serve");
 }

@@ -160,6 +160,20 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test connector_registry --test photos_picker
 
+      # C3: staging demo mode. The boot test needs Postgres because the demo
+      # account and its content are seeded at startup, and the seed-idempotence
+      # test is a `--lib` test that also skips without DATABASE_URL — so both run
+      # here rather than in the plain `cargo test` job above.
+      - name: Run the staging demo mode acceptance tests
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --test demo_mode
+
+      - name: Run the demo seeding idempotence test
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --lib "demo::tests"
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest
