@@ -393,8 +393,9 @@ impl SessionFactory for LiveFactory {
                 })
                 // The phone pushes its conversation list when the device pairs.
                 // Draining it is what fills the picker before anyone sends a
-                // message; the library acks and downloads the chunk itself, so
-                // there is nothing to request here.
+                // message. Registering this handler is also what makes the
+                // library keep the blob at all: it drops a chunk nobody is
+                // listening for, and owns the ack/transfer itself.
                 .on_event_for(&[EventKind::HistorySync], move |event, _client| {
                     let shared = Arc::clone(&history);
                     async move {
