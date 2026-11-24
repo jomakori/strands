@@ -2477,6 +2477,13 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* Screen 0 for a connector whose items arrive by sync: the reason there is
+   nothing to pick yet, with the footer below it (A3). */
+.import-zero-chats {
+  display: grid;
+  gap: 14px;
+}
+
 .import-footer {
   display: flex;
   flex-wrap: wrap;

@@ -46,6 +46,19 @@ fn imported_line(report: &WhatsAppImportReport) -> String {
     line
 }
 
+/// The gate key and the meta line for a WhatsApp row with no chats (A3).
+///
+/// Only a live link can be waiting for a sync; without one, mid-pairing, or
+/// after the bridge died, the connection is the reason and the line says so.
+fn empty_chats_copy(state: &WhatsAppLinkState) -> (&'static str, &'static str) {
+    match state {
+        WhatsAppLinkState::Linked => ("linked-empty", state::WHATSAPP_ZERO_CHAT_META),
+        WhatsAppLinkState::Unlinked => ("unlinked", state::WHATSAPP_UNLINKED_META),
+        WhatsAppLinkState::AwaitingScan { .. } => ("awaiting-scan", state::WHATSAPP_PAIRING_META),
+        WhatsAppLinkState::Failed { .. } => ("failed", state::WHATSAPP_FAILED_META),
+    }
+}
+
 /// The whole settings screen: a back link, then the connector list.
 #[component]
 pub fn Settings() -> Element {
@@ -215,6 +228,14 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
         },
     };
 
+    // A3: the chat-less row does not count zeroes, it names the reason, and the
+    // reason follows the link rather than the chat list. Computed here because
+    // the row's rsx only takes identifiers.
+    let (empty_gate, empty_line) = state
+        .as_ref()
+        .map(empty_chats_copy)
+        .unwrap_or(("linked-empty", state::WHATSAPP_ZERO_CHAT_META));
+
     rsx! {
         article { class: "connector-row connector-whatsapp", "data-connector-id": "whatsapp",
             role: "listitem",
@@ -260,11 +281,12 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
 
             if let Some(status) = snapshot.as_ref() {
                 if status.chats.is_empty() {
-                    // A3: zero chats means the phone has not pushed its history
-                    // yet, so the count is not "0 chats" but the reason there are
-                    // none — the same words the import picker uses.
+                    // A3: the count is not "0 chats" but the reason there are
+                    // none — the same words the import picker uses, and only the
+                    // link itself can be waiting for a sync.
                     p { class: "whatsapp-meta whatsapp-muted", "data-whatsapp-chats": "0",
-                        "{state::WHATSAPP_ZERO_CHAT_META} · {status.allowlist.len()} allowed · last sync: {last_sync}"
+                        "data-whatsapp-gate": empty_gate,
+                        "{empty_line} · {status.allowlist.len()} allowed · last sync: {last_sync}"
                     }
                 } else {
                     p { class: "whatsapp-meta whatsapp-muted",
@@ -304,12 +326,32 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
                                                 Ok(status) => {
                                                     error.set(status.last_error.clone());
                                                     let no_chats = status.chats.is_empty();
-                                                    link.set(Some(status));
-                                                    if no_chats {
-                                                        state::WHATSAPP_ZERO_CHAT_LINE.to_owned()
+                                                    // A3: only a linked phone can
+                                                    // be waiting for a sync; with
+                                                    // no link the receipt names
+                                                    // the connection instead of a
+                                                    // sync that will never come.
+                                                    let receipt = if no_chats {
+                                                        match &status.state {
+                                                            WhatsAppLinkState::Linked => {
+                                                                state::WHATSAPP_ZERO_CHAT_LINE
+                                                            }
+                                                            WhatsAppLinkState::Unlinked => {
+                                                                state::WHATSAPP_UNLINKED_META
+                                                            }
+                                                            WhatsAppLinkState::AwaitingScan {
+                                                                ..
+                                                            } => state::WHATSAPP_PAIRING_META,
+                                                            WhatsAppLinkState::Failed { .. } => {
+                                                                state::WHATSAPP_FAILED_META
+                                                            }
+                                                        }
+                                                        .to_owned()
                                                     } else {
                                                         imported_line(&report)
-                                                    }
+                                                    };
+                                                    link.set(Some(status));
+                                                    receipt
                                                 }
                                                 Err(_) => imported_line(&report),
                                             };

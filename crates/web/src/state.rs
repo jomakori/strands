@@ -40,9 +40,12 @@ pub fn RetryNotice(message: String, onretry: EventHandler<MouseEvent>) -> Elemen
 
 /// Why a WhatsApp surface is empty at zero chats (A3).
 ///
-/// A fresh link reports no chats until the phone pushes its history, so the
-/// honest answer is the reason — not a preview failure and not a receipt that
-/// counts zeroes. Both the import picker and the Settings row read these, so the
+/// A *linked* phone reports no chats until it pushes its history, so the honest
+/// answer there is the reason — not a preview failure and not a receipt that
+/// counts zeroes. A phone with no link, a pairing still open, or a bridge that
+/// died is empty for a different reason, and telling that user to wait for a
+/// sync would be a lie they cannot act on: those three read the connection
+/// state instead. Both the import picker and the Settings row read these, so the
 /// two cannot drift apart.
 pub const WHATSAPP_ZERO_CHAT_TITLE: &str = "WhatsApp history has not synced yet.";
 pub const WHATSAPP_ZERO_CHAT_HINT: &str = "Chats appear here as the sync arrives; reopen this screen once the phone has sent its history.";
@@ -52,6 +55,24 @@ pub const WHATSAPP_ZERO_CHAT_LINE: &str = "WhatsApp history has not synced yet, 
 /// The row's chat count when the phone has reported no chats at all.
 pub const WHATSAPP_ZERO_CHAT_META: &str =
     "No chats on the phone yet — history has not synced. Chats appear here as the sync arrives.";
+
+/// The picker's answer when nothing is linked (A3).
+pub const WHATSAPP_UNLINKED_TITLE: &str = "WhatsApp is not linked.";
+pub const WHATSAPP_UNLINKED_HINT: &str =
+    "Link the phone from Settings; chats appear here once it is linked and its history syncs.";
+pub const WHATSAPP_UNLINKED_META: &str =
+    "Not linked yet — link the phone in Settings to see its chats.";
+
+/// The picker's answer while a pairing attempt is still open (A3).
+pub const WHATSAPP_PAIRING_TITLE: &str = "WhatsApp is still pairing.";
+pub const WHATSAPP_PAIRING_HINT: &str = "Finish linking in Settings; this screen fills in once the phone has scanned the code and synced.";
+pub const WHATSAPP_PAIRING_META: &str = "Pairing — waiting for the phone to finish linking.";
+
+/// The picker's answer when the bridge died on its own (A3). The server's own
+/// reason is appended, so the row says what actually happened.
+pub const WHATSAPP_FAILED_TITLE: &str = "The WhatsApp bridge went down.";
+pub const WHATSAPP_FAILED_META: &str = "Bridge down — reconnect in Settings to see chats.";
+pub const WHATSAPP_FAILED_HINT: &str = "Reconnect the phone in Settings, then sync again.";
 
 /// Nothing to show, and why that is not a failure.
 #[component]

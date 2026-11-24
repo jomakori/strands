@@ -67,13 +67,34 @@ const HISTORY = {
 };
 
 // A freshly linked phone that has not pushed any history yet: no chats at all.
-const WHATSAPP_NO_CHATS = {
+const WHATSAPP_LINKED_EMPTY = {
   state: { state: "linked" },
   disclosure: "Unofficial WhatsApp link.",
   allowlist: [],
   chats: [],
   last_sync_at: null,
   last_error: null,
+};
+
+// No session at all: never paired, or unlinked from the phone. The picker must
+// not promise a sync that cannot arrive until the phone is linked again.
+const WHATSAPP_UNLINKED_EMPTY = {
+  state: { state: "unlinked" },
+  disclosure: "Unofficial WhatsApp link.",
+  allowlist: [],
+  chats: [],
+  last_sync_at: null,
+  last_error: null,
+};
+
+// The bridge died on its own, with the server's reason to show verbatim.
+const WHATSAPP_FAILED_EMPTY = {
+  state: { state: "failed", reason: "the phone unlinked this device" },
+  disclosure: "Unofficial WhatsApp link.",
+  allowlist: [],
+  chats: [],
+  last_sync_at: null,
+  last_error: "the phone unlinked this device",
 };
 
 function importResult(keys: string[]) {
@@ -114,7 +135,7 @@ async function stubApi(page: Page, stub: Stub = {}) {
       return route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(stub.whatsapp ?? WHATSAPP_NO_CHATS),
+        body: JSON.stringify(stub.whatsapp ?? WHATSAPP_LINKED_EMPTY),
       });
     }
     if (path.endsWith("/preview")) {
@@ -297,25 +318,86 @@ test.describe("import wizard", () => {
     await expect(page.locator(card)).toHaveCount(0);
   });
 
-  test("a WhatsApp picker with no chats says the history has not synced yet, and import stays disabled", async ({
+  // A3, three ways: zero chats means different things depending on the link, and
+  // each one has to say what is actually true instead of counting zeroes.
+  test("a linked phone with no chats says the history has not synced yet", async ({
     page,
   }, testInfo) => {
-    await stubApi(page, { whatsapp: WHATSAPP_NO_CHATS });
+    await stubApi(page, { whatsapp: WHATSAPP_LINKED_EMPTY });
     await openWizard(page, "whatsapp");
 
     const body = page.locator("body");
-    await expect(page.locator('[data-testid="import-zero-chats"]')).toBeVisible();
+    await expect(
+      page.locator('[data-testid="import-zero-chats"][data-whatsapp-gate="linked-empty"]'),
+    ).toBeVisible();
     await expect(body).toContainText("WhatsApp history has not synced yet.");
     await expect(body).toContainText("Chats appear here as the sync arrives");
+    await expect(body).not.toContainText("WhatsApp is not linked.");
     await expect(body).not.toContainText("Imported 0 notes from 0 chats");
     await expect(body).not.toContainText("Could not load candidates");
 
     await expect(page.locator(card)).toHaveCount(0);
-    await expect(page.locator(submit)).toBeDisabled();
     await expect(page.locator(summary)).toHaveText("Importing 0 of 0 strands");
+    await expect(page.locator(submit)).toBeDisabled();
+    await expect(page.locator('[data-testid="import-open-settings"]')).toHaveCount(0);
 
     await page.screenshot({
-      path: `captures/${testInfo.project.name}-import-whatsapp-zero-chats.png`,
+      path: `captures/${testInfo.project.name}-import-whatsapp-linked-empty.png`,
+      fullPage: true,
+    });
+  });
+
+  test("an unlinked phone says the link is missing, not that a sync is coming", async ({
+    page,
+  }, testInfo) => {
+    await stubApi(page, { whatsapp: WHATSAPP_UNLINKED_EMPTY });
+    await openWizard(page, "whatsapp");
+
+    const body = page.locator("body");
+    await expect(
+      page.locator('[data-testid="import-zero-chats"][data-whatsapp-gate="unlinked"]'),
+    ).toBeVisible();
+    await expect(body).toContainText("WhatsApp is not linked.");
+    await expect(body).toContainText("Link the phone from Settings");
+    await expect(body).not.toContainText("history has not synced");
+    await expect(body).not.toContainText("Imported 0 notes from 0 chats");
+    await expect(body).not.toContainText("Could not load candidates");
+
+    // With no link there is nothing an import could run on: the footer sends the
+    // user to the screen that can fix it rather than offering a dead button.
+    await expect(page.locator(card)).toHaveCount(0);
+    await expect(page.locator(submit)).toHaveCount(0);
+    await expect(page.locator(summary)).toHaveCount(0);
+    await expect(page.locator('[data-testid="import-open-settings"]')).toBeVisible();
+
+    await page.screenshot({
+      path: `captures/${testInfo.project.name}-import-whatsapp-unlinked.png`,
+      fullPage: true,
+    });
+  });
+
+  test("a dead bridge shows the server's reason, not a sync promise", async ({
+    page,
+  }, testInfo) => {
+    await stubApi(page, { whatsapp: WHATSAPP_FAILED_EMPTY });
+    await openWizard(page, "whatsapp");
+
+    const body = page.locator("body");
+    await expect(
+      page.locator('[data-testid="import-zero-chats"][data-whatsapp-gate="failed"]'),
+    ).toBeVisible();
+    await expect(body).toContainText("The WhatsApp bridge went down.");
+    await expect(body).toContainText("the phone unlinked this device");
+    await expect(body).not.toContainText("history has not synced");
+    await expect(body).not.toContainText("Imported 0 notes from 0 chats");
+    await expect(body).not.toContainText("Could not load candidates");
+
+    await expect(page.locator(card)).toHaveCount(0);
+    await expect(page.locator(submit)).toHaveCount(0);
+    await expect(page.locator('[data-testid="import-open-settings"]')).toBeVisible();
+
+    await page.screenshot({
+      path: `captures/${testInfo.project.name}-import-whatsapp-failed.png`,
       fullPage: true,
     });
   });
