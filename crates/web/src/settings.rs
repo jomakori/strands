@@ -15,7 +15,8 @@
 
 use dioxus::prelude::*;
 use strands_api_types::{
-    ConnectorStatus, ConnectorSummary, WHATSAPP_DISCLOSURE, WhatsAppLinkState, WhatsAppStatus,
+    ConnectorStatus, ConnectorSummary, WHATSAPP_DISCLOSURE, WhatsAppImportReport,
+    WhatsAppLinkState, WhatsAppStatus,
 };
 
 use crate::api;
@@ -27,6 +28,36 @@ use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 /// fast enough that scanning a QR feels immediate, slow enough that an idle
 /// settings tab is not a request stream.
 const WHATSAPP_POLL: u32 = 2_000;
+
+/// What a sync that had chats to look at reports: counts, plus the attachments
+/// it had to skip. Zero-chat syncs never reach this — they answer with the reason
+/// the picker is empty instead (A3).
+fn imported_line(report: &WhatsAppImportReport) -> String {
+    let mut line = format!(
+        "Imported {} notes from {} chats ({} chats not allowed).",
+        report.notes_created, report.chats_imported, report.chats_skipped
+    );
+    if report.media_skipped > 0 {
+        line.push_str(&format!(
+            " {} attachments had no caption and were skipped.",
+            report.media_skipped
+        ));
+    }
+    line
+}
+
+/// The gate key and the meta line for a WhatsApp row with no chats (A3).
+///
+/// Only a live link can be waiting for a sync; without one, mid-pairing, or
+/// after the bridge died, the connection is the reason and the line says so.
+fn empty_chats_copy(state: &WhatsAppLinkState) -> (&'static str, &'static str) {
+    match state {
+        WhatsAppLinkState::Linked => ("linked-empty", state::WHATSAPP_ZERO_CHAT_META),
+        WhatsAppLinkState::Unlinked => ("unlinked", state::WHATSAPP_UNLINKED_META),
+        WhatsAppLinkState::AwaitingScan { .. } => ("awaiting-scan", state::WHATSAPP_PAIRING_META),
+        WhatsAppLinkState::Failed { .. } => ("failed", state::WHATSAPP_FAILED_META),
+    }
+}
 
 /// The whole settings screen: a back link, then the connector list.
 #[component]
@@ -197,6 +228,14 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
         },
     };
 
+    // A3: the chat-less row does not count zeroes, it names the reason, and the
+    // reason follows the link rather than the chat list. Computed here because
+    // the row's rsx only takes identifiers.
+    let (empty_gate, empty_line) = state
+        .as_ref()
+        .map(empty_chats_copy)
+        .unwrap_or(("linked-empty", state::WHATSAPP_ZERO_CHAT_META));
+
     rsx! {
         article { class: "connector-row connector-whatsapp", "data-connector-id": "whatsapp",
             role: "listitem",
@@ -241,8 +280,18 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
             }
 
             if let Some(status) = snapshot.as_ref() {
-                p { class: "whatsapp-meta whatsapp-muted",
-                    "{status.chats.len()} chats on the phone · {status.allowlist.len()} allowed · last sync: {last_sync}"
+                if status.chats.is_empty() {
+                    // A3: the count is not "0 chats" but the reason there are
+                    // none — the same words the import picker uses, and only the
+                    // link itself can be waiting for a sync.
+                    p { class: "whatsapp-meta whatsapp-muted", "data-whatsapp-chats": "0",
+                        "data-whatsapp-gate": empty_gate,
+                        "{empty_line} · {status.allowlist.len()} allowed · last sync: {last_sync}"
+                    }
+                } else {
+                    p { class: "whatsapp-meta whatsapp-muted",
+                        "{status.chats.len()} chats on the phone · {status.allowlist.len()} allowed · last sync: {last_sync}"
+                    }
                 }
             }
 
@@ -267,16 +316,45 @@ fn WhatsAppRow(summary: ConnectorSummary) -> Element {
                                     match api::whatsapp_sync().await {
                                         Ok(report) => {
                                             error.set(None);
-                                            let mut line = format!(
-                                                "Imported {} notes from {} chats ({} chats not allowed).",
-                                                report.notes_created, report.chats_imported, report.chats_skipped
-                                            );
-                                            if report.media_skipped > 0 {
-                                                line.push_str(&format!(
-                                                    " {} attachments had no caption and were skipped.",
-                                                    report.media_skipped
-                                                ));
-                                            }
+                                            // A3: a sync may be what makes the
+                                            // history arrive, so the receipt is
+                                            // read off the refreshed snapshot. No
+                                            // chats means there was nothing to
+                                            // count — the answer is why, not
+                                            // "Imported 0 notes from 0 chats".
+                                            let line = match api::whatsapp_status().await {
+                                                Ok(status) => {
+                                                    error.set(status.last_error.clone());
+                                                    let no_chats = status.chats.is_empty();
+                                                    // A3: only a linked phone can
+                                                    // be waiting for a sync; with
+                                                    // no link the receipt names
+                                                    // the connection instead of a
+                                                    // sync that will never come.
+                                                    let receipt = if no_chats {
+                                                        match &status.state {
+                                                            WhatsAppLinkState::Linked => {
+                                                                state::WHATSAPP_ZERO_CHAT_LINE
+                                                            }
+                                                            WhatsAppLinkState::Unlinked => {
+                                                                state::WHATSAPP_UNLINKED_META
+                                                            }
+                                                            WhatsAppLinkState::AwaitingScan {
+                                                                ..
+                                                            } => state::WHATSAPP_PAIRING_META,
+                                                            WhatsAppLinkState::Failed { .. } => {
+                                                                state::WHATSAPP_FAILED_META
+                                                            }
+                                                        }
+                                                        .to_owned()
+                                                    } else {
+                                                        imported_line(&report)
+                                                    };
+                                                    link.set(Some(status));
+                                                    receipt
+                                                }
+                                                Err(_) => imported_line(&report),
+                                            };
                                             notice.set(Some(line));
                                         }
                                         Err(failure) => error.set(Some(format!("Sync failed: {failure}"))),
