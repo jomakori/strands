@@ -1,0 +1,240 @@
+name: staging
+
+# One workflow owns the staging environment for a pull request; the `staging`
+# label is the only input a maintainer needs:
+#
+#   label added       build ghcr.io/jomakori/strands:pr-<N>, then point
+#                     jomakori/gke_GitOps at it: enable=true, tag=pr-<N>
+#   label removed     enable=false, tag="0.0.0" — only while staging still runs
+#                     this pull request's tag, so the first of two labelled pull
+#                     requests to close cannot unpin the other one
+#   pull request closed
+#                     the same unpin, so a merge or a close never leaves the host
+#                     pointing at a branch that no longer exists
+#
+# The registry confirms the pushed tag (`docker manifest inspect`) before the
+# values move, so staging can never name an image that does not resolve.
+#
+# Fork pull requests are skipped: their token is read-only, so they cannot push
+# an image and must never move staging. No label is created or deleted here;
+# `staging` is applied and removed by a maintainer.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the staging image
+    # A pull request without the label has nothing to build, and a close only
+    # unpins. Fork heads stay out: their token cannot push to this namespace.
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'staging')
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/jomakori/strands
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Check out the merge commit the image is built from
+        uses: actions/checkout@v7
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to the registry
+        run: >-
+          echo "${{ secrets.GITHUB_TOKEN }}"
+          | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # Native arm64 runner, so no QEMU: the same platform and the same
+      # Dockerfile the release builds. GIT_COMMIT is the commit actually built
+      # — the merge result — which is what /healthz reports.
+      - name: Build and push the staging image
+        run: |
+          docker buildx build \
+            --push \
+            --platform linux/arm64 \
+            --build-arg GIT_COMMIT="${{ github.sha }}" \
+            --cache-from type=gha,scope=staging \
+            --cache-to type=gha,mode=max,scope=staging \
+            --tag "${IMAGE}:pr-${PR_NUMBER}" \
+            .
+
+      # The registry is the only witness that the push landed. A tag that does
+      # not resolve fails this job, and `deploy` then never runs.
+      - name: Confirm the tag resolves in the registry
+        run: docker manifest inspect "${IMAGE}:pr-${PR_NUMBER}" >/dev/null
+
+  deploy:
+    name: Pin or unpin staging
+    needs: build
+    # Explicit result checks: `always()` sees a skipped build (close, unlabel),
+    # and a label whose build failed must never reach the GitOps values.
+    if: |
+      always() &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (
+        (github.event.action == 'labeled' && github.event.label.name == 'staging' && needs.build.result == 'success') ||
+        (github.event.action == 'unlabeled' && github.event.label.name == 'staging' && needs.build.result == 'skipped') ||
+        (github.event.action == 'closed' && needs.build.result == 'skipped')
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # Serialized across every pull request — one staging host, one writer — and
+    # never cancelled: each run edits the head it reads, and a cancelled unpin
+    # would leave staging pinned to a closed branch.
+    concurrency:
+      group: staging-deploy
+      cancel-in-progress: false
+    env:
+      GITOPS_REPO: jomakori/gke_GitOps
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      MODE: ${{ github.event.action == 'labeled' && 'pin' || 'unpin' }}
+      GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
+    steps:
+      - name: Write the staging values
+        run: |
+          set -euo pipefail
+
+          if [ "${MODE}" = pin ]; then
+            message="chore(strands): staging pr-${PR_NUMBER}"
+          else
+            message="chore(strands): unpin staging"
+          fi
+
+          # The token rides in a header, not the clone URL, so a failed git
+          # command cannot print it into the run log.
+          auth="$(printf 'x-access-token:%s' "${GITOPS_TOKEN}" | base64 -w0)"
+          gitops() { git -c http.extraheader="Authorization: Basic ${auth}" "$@"; }
+
+          checkout="$(mktemp -d)"
+          gitops clone --quiet --depth 1 \
+            "https://github.com/${GITOPS_REPO}.git" "${checkout}"
+          cd "${checkout}"
+
+          # A release can pin production while this run waits, so every attempt
+          # starts from whatever main now is and reapplies the edit against it:
+          # a lost push race retries, it never rebases by hand.
+          for attempt in 1 2 3 4 5; do
+            gitops fetch --quiet --depth 1 origin main
+            git reset --quiet --hard FETCH_HEAD
+
+            status=0
+            python3 - "${checkout}" "${MODE}" "${PR_NUMBER}" <<'PY' || status=$?
+          import sys
+
+          root, mode, pr = sys.argv[1], sys.argv[2], sys.argv[3]
+          own = f'"pr-{pr}"'
+          tag = own if mode == "pin" else '"0.0.0"'
+          enable = "true" if mode == "pin" else "false"
+
+
+          def indent(line):
+              return len(line) - len(line.lstrip())
+
+
+          def block(lines, key, level, lo, hi):
+              """Index range of the block nested under `key:` at column `level`."""
+              for k in range(lo, hi):
+                  if lines[k].rstrip("\n") == " " * level + key + ":":
+                      end = k + 1
+                      while end < hi:
+                          if lines[end].strip() and indent(lines[end]) <= level:
+                              break
+                          end += 1
+                      return k, end
+              raise SystemExit(f"no {key}: at indent {level} in the values files")
+
+
+          def locate(lines, path, name):
+              level, lo, hi = 0, 0, len(lines)
+              for key in path:
+                  lo, hi = block(lines, key, level, lo, hi)
+                  level += 2
+              hits = [k for k in range(lo + 1, hi) if lines[k].strip().startswith(name + ":")]
+              if len(hits) != 1:
+                  raise SystemExit(f"expected one {'.'.join(path + (name,))}, found {len(hits)}")
+              if indent(lines[hits[0]]) != level:
+                  raise SystemExit(f"{name}: is not at indent {level}")
+              return hits[0]
+
+
+          def load(rel):
+              with open(f"{root}/{rel}") as handle:
+                  return handle.readlines()
+
+
+          # Staging belongs to the pull request whose tag it runs; any other tag
+          # means another labelled pull request owns it and this run must not
+          # touch it.
+          helm_path = ("strands", "environments", "staging")
+          helm = load("apps/helm/values.yaml")
+          index = locate(helm, helm_path, "tag")
+          current = helm[index].strip().split(":", 1)[1].strip()
+          if mode == "unpin" and current != own:
+              print(f"staging runs {current}, not {own}: another pull request owns it, nothing to unpin")
+              raise SystemExit(3)
+
+          edited = False
+          for rel, path, name, wanted in (
+              ("apps/helm/values.yaml", helm_path, "tag", tag),
+              ("apps/argocd-appset/values.yaml", ("strands", "environment", "staging"), "enable", enable),
+          ):
+              lines = load(rel)
+              at = locate(lines, path, name)
+              have = lines[at].strip().split(":", 1)[1].strip()
+              if have == wanted:
+                  continue
+              lines[at] = " " * indent(lines[at]) + f"{name}: {wanted}\n"
+              with open(f"{root}/{rel}", "w") as handle:
+                  handle.writelines(lines)
+              print(f"{rel}: {'.'.join(path + (name,))} {have} -> {wanted}")
+              edited = True
+
+          if not edited:
+              print(f"staging already is enable={enable}, tag={tag}")
+              raise SystemExit(3)
+          PY
+
+            case "${status}" in
+              0) ;;
+              3)
+                echo "nothing to commit"
+                exit 0
+                ;;
+              *)
+                echo "::error::editing the staging values failed (exit ${status})"
+                exit "${status}"
+                ;;
+            esac
+
+            if git diff --quiet; then
+              echo "the staging values already match; nothing to commit"
+              exit 0
+            fi
+
+            git -c user.name="strands-staging[bot]" \
+                -c user.email="staging@users.noreply.github.com" \
+                commit --quiet --all -m "${message}"
+            echo "commit $(git rev-parse HEAD): ${message}"
+
+            if gitops push --quiet origin HEAD:main; then
+              echo "pushed to ${GITOPS_REPO} main: $(git rev-parse HEAD)"
+              exit 0
+            fi
+
+            echo "push attempt ${attempt} lost the race; reapplying on the new head"
+            sleep $((attempt * 3))
+          done
+
+          echo "::error::could not push the staging change after 5 attempts"
+          exit 1
