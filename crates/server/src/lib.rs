@@ -17,6 +17,7 @@ pub mod gmaps;
 pub mod ingest;
 pub mod links;
 pub mod llm;
+pub mod oauth;
 pub mod photos;
 pub mod places;
 pub mod search;
