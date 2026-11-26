@@ -174,6 +174,16 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --lib "demo::tests"
 
+      # B1: the connect-state table and the token columns are DB-gated lib tests.
+      # Without this step they would be skipped by the plain `cargo test` job,
+      # which has no DATABASE_URL, and the migration would never be exercised on
+      # a real Postgres — this job's `sqlx migrate run` above only proves it
+      # applies, not that the row round-trips.
+      - name: Run the connector OAuth state tests
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --lib "oauth::tests"
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest
