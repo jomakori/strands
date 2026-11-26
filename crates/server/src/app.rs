@@ -18,6 +18,7 @@ use crate::api;
 use crate::auth::IdentityProvider;
 use crate::auth::routes::routes as auth_routes;
 use crate::config::AuthConfig;
+use crate::connectors::PhotosOAuth;
 use crate::connectors::routes as connector_routes;
 use crate::demo::DemoAccount;
 use crate::gmaps::places::{PlaceResolver, UnconfiguredResolver};
@@ -87,6 +88,10 @@ pub struct AppState {
     /// run with no `dx build`, and in the router tests, which exercise the API
     /// surface only (ticket T20a).
     pub assets: Option<Assets>,
+    /// The Google OAuth client the Photos connect route redirects to (ticket
+    /// B2). `None` when the deploy has no `GOOGLE_CLIENT_ID`, which the connect
+    /// route reports rather than inventing a client.
+    pub photos_oauth: Option<Arc<PhotosOAuth>>,
 }
 
 impl AppState {
@@ -112,6 +117,7 @@ impl AppState {
             whatsapp: Arc::new(WhatsAppRegistry::new(Arc::new(UnconfiguredFactory))),
             whatsapp_cipher: None,
             assets: None,
+            photos_oauth: None,
         }
     }
 
@@ -157,6 +163,12 @@ impl AppState {
     /// routes report a misconfigured deploy instead of importing nothing.
     pub fn with_secrets(mut self, key: Arc<SecretKey>) -> Self {
         self.secrets = Some(key);
+        self
+    }
+
+    /// Install the Google OAuth client the Photos connect route uses (ticket B2).
+    pub fn with_photos_oauth(mut self, oauth: Arc<PhotosOAuth>) -> Self {
+        self.photos_oauth = Some(oauth);
         self
     }
 

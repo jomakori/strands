@@ -9,7 +9,7 @@ use strands_server::app::{AppState, router};
 use strands_server::auth::IdentityProvider;
 use strands_server::auth::identity::OidcIdentityProvider;
 use strands_server::config::{AuthConfig, ConfigError};
-use strands_server::connectors::{build_registry, dev_connectors_enabled};
+use strands_server::connectors::{PhotosOAuth, build_registry, dev_connectors_enabled};
 use strands_server::db;
 use strands_server::demo::{self, DemoIdentityProvider};
 use strands_server::gmaps::places::PlacesApiResolver;
@@ -188,6 +188,19 @@ async fn main() {
     let state = match &secrets {
         Some(key) => state.with_secrets(Arc::clone(key)),
         None => state,
+    };
+
+    // The Photos grant needs a Google client; without one the connect route
+    // reports the missing configuration instead of redirecting nowhere.
+    let state = match PhotosOAuth::from_env(&state.auth.public_base_url) {
+        Some(oauth) => state.with_photos_oauth(Arc::new(oauth)),
+        None => {
+            eprintln!(
+                "strands: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are not set; \
+                 Google Photos cannot be connected"
+            );
+            state
+        }
     };
 
     // WhatsApp rides on the same key: without it there is no cipher, hence no
