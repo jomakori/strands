@@ -41,7 +41,6 @@ use crate::auth::CurrentUser;
 use crate::connectors::ledger;
 use crate::error::AppError;
 use crate::ingest::{TagIndex, load_tag_summaries};
-use crate::secrets;
 
 /// `connectors.kind` for this lane; also the `source` label stored in meta.
 /// `pub(crate)` so the connector's status check reads the same row this lane
@@ -598,24 +597,11 @@ async fn start_session(
 }
 
 /// The caller's stored Google Photos access token, or the reason there is none.
+///
+/// Every pick path reads its token here, so the one place that knows a token
+/// can expire is also the one place that refreshes it (ticket B3).
 async fn access_token(state: &AppState, user_id: Uuid) -> Result<String, AppError> {
-    let key = state.secrets.as_ref().ok_or_else(|| {
-        AppError::internal(
-            "photos connector",
-            sqlx::Error::Protocol(format!(
-                "{} is unset, so connector tokens cannot be opened",
-                secrets::KEY_ENV
-            )),
-        )
-    })?;
-
-    secrets::access_token(&state.pool, key.as_ref(), user_id, CONNECTOR_KIND)
-        .await?
-        .ok_or_else(|| {
-            AppError::BadRequest(
-                "the Google Photos connector is not connected; connect it first".to_owned(),
-            )
-        })
+    super::connectors::photos_access_token(state, user_id).await
 }
 
 /// Map a picker failure onto the answer the client can act on.
