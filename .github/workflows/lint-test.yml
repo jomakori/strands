@@ -184,6 +184,14 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --lib "oauth::tests"
 
+      # B2: the connect and callback routes are DB-gated lib tests — they write
+      # the state row, seal the token and read it back — so they run here, where
+      # Postgres exists, and never skip silently in the job above.
+      - name: Run the Google Photos connect tests
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --lib "connectors::photos_connect::tests"
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest

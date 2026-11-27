@@ -8,9 +8,11 @@
 
 pub mod ledger;
 mod photos;
+mod photos_connect;
 mod whatsapp;
 
 pub use photos::PhotosConnector;
+pub use photos_connect::PhotosOAuth;
 pub use whatsapp::WhatsAppConnector;
 
 use std::sync::Arc;
@@ -42,6 +44,9 @@ pub fn routes() -> Router<AppState> {
         .route("/api/v1/connectors/{id}/preview", get(connector_preview))
         .route("/api/v1/connectors/{id}/import", post(connector_import))
         .route("/api/v1/connectors/{id}/history", get(connector_history))
+        // The Google Photos grant lives beside the registry because it is the
+        // only connector with a real OAuth flow so far (ticket B2).
+        .merge(photos_connect::routes())
 }
 
 /// Environment switch that adds the stub, the deliberately failing connector
