@@ -144,9 +144,11 @@ impl Connector for WhatsAppConnector {
         })
     }
 
-    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Err(ConnectorError(
-            "unlinking a phone is asynchronous: press Disconnect on this row".to_owned(),
-        ))
+    fn disconnect<'a>(&'a self, _user: Uuid) -> ConnectorFuture<'a, Result<(), ConnectorError>> {
+        Box::pin(async {
+            Err(ConnectorError(
+                "unlinking a phone is asynchronous: press Disconnect on this row".to_owned(),
+            ))
+        })
     }
 }

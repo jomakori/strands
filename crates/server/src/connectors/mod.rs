@@ -32,7 +32,8 @@ use strands_api_types::{
 };
 use strands_core::ConnectorStatus;
 use strands_core::Registry;
-use strands_core::connector::{ConnectorReport, ImportOutcome};
+use strands_core::connector::{Connector, ConnectorReport, ImportOutcome};
+use uuid::Uuid;
 
 use crate::app::AppState;
 use crate::auth::CurrentUser;
@@ -43,6 +44,10 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/connectors", get(list_connectors))
         .route("/api/v1/connectors/{id}/status", get(connector_status))
+        .route(
+            "/api/v1/connectors/{id}/disconnect",
+            post(connector_disconnect),
+        )
         .route("/api/v1/connectors/{id}/preview", get(connector_preview))
         .route("/api/v1/connectors/{id}/import", post(connector_import))
         .route("/api/v1/connectors/{id}/history", get(connector_history))
@@ -137,13 +142,37 @@ pub async fn connector_status(
     Path(id): Path<String>,
 ) -> Result<Json<ConnectorSummary>, AppError> {
     let connector = state.registry.get(&id).ok_or(AppError::NotFound)?;
+    Ok(Json(summary(connector, user.id).await))
+}
+
+/// `POST /api/v1/connectors/{id}/disconnect` — revoke the connector's access
+/// and forget what was stored for this user, then answer with the row as it
+/// now reads (ticket B4).
+///
+/// The body is the same [`ConnectorSummary`] `status` returns, so the settings
+/// screen updates a row from the disconnect's own answer instead of asking
+/// again. A repeat call is a `200` with the same body: the connector's
+/// `disconnect` is specified as a no-op once there is nothing left to purge.
+pub async fn connector_disconnect(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Json<ConnectorSummary>, AppError> {
+    let connector = state.registry.get(&id).ok_or(AppError::NotFound)?;
+    connector.disconnect(user.id).await?;
+    Ok(Json(summary(connector, user.id).await))
+}
+
+/// The wire row for one connector: its own status if it can answer, its own
+/// error if it cannot — never a 500 that takes the rest of the screen down.
+async fn summary(connector: &dyn Connector, user: Uuid) -> ConnectorSummary {
     let manifest = connector.manifest();
-    let (status, error) = match connector.status(user.id).await {
+    let (status, error) = match connector.status(user).await {
         Ok(status) => (Some(map_status(status)), None),
         Err(error) => (None, Some(error.to_string())),
     };
 
-    Ok(Json(ConnectorSummary {
+    ConnectorSummary {
         id: manifest.id.to_owned(),
         label: manifest.label.to_owned(),
         scopes: manifest
@@ -153,7 +182,7 @@ pub async fn connector_status(
             .collect(),
         status,
         error,
-    }))
+    }
 }
 
 /// Everything this connector can currently see for the caller, each item
@@ -294,10 +323,16 @@ fn map_status(status: ConnectorStatus) -> WireStatus {
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+    use std::time::Duration as StdDuration;
 
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use chrono::{Duration, Utc};
     use sqlx::PgPool;
+    use sqlx::postgres::PgPoolOptions;
     use strands_core::Registry;
     use strands_core::connector::{FailingConnector, PlaceholderConnector, StubConnector};
+    use tower::ServiceExt;
     use uuid::Uuid;
 
     use super::*;
@@ -481,5 +516,238 @@ mod tests {
 
         assert_eq!(summary.status, Some(WireStatus::Disconnected));
         assert!(summary.error.is_none());
+    }
+
+    // ---------------------------------------------------------------------
+    // Ticket B4: disconnect. These need real rows — the claim under test is
+    // that a stored token is gone and the other connector's row survived, and
+    // neither can be observed on a lazy pool.
+    // ---------------------------------------------------------------------
+
+    /// Same skip-or-fail contract as `tests/common`: a laptop without Postgres
+    /// skips loudly, CI (`STRANDS_TEST_REQUIRE_DB=1`) fails instead of skipping.
+    async fn pool_or_skip(test_name: &str) -> Option<PgPool> {
+        let url = std::env::var("DATABASE_URL")
+            .ok()
+            .filter(|url| !url.trim().is_empty());
+        let Some(url) = url else {
+            eprintln!(
+                "skipping {test_name}: DATABASE_URL is not set (no live Postgres on this host)"
+            );
+            return None;
+        };
+
+        let required = std::env::var("STRANDS_TEST_REQUIRE_DB").is_ok_and(|value| value == "1");
+
+        let pool = match PgPoolOptions::new()
+            .acquire_timeout(StdDuration::from_secs(3))
+            .connect(&url)
+            .await
+        {
+            Ok(pool) => pool,
+            Err(error) if required => {
+                panic!("STRANDS_TEST_REQUIRE_DB is set but Postgres is unreachable: {error}")
+            }
+            Err(error) => {
+                eprintln!("skipping {test_name}: cannot reach DATABASE_URL ({error})");
+                return None;
+            }
+        };
+
+        crate::db::MIGRATOR
+            .run(&pool)
+            .await
+            .expect("apply migrations");
+        Some(pool)
+    }
+
+    fn db_key() -> Arc<SecretKey> {
+        Arc::new(SecretKey::from_bytes(&[9u8; 32]).expect("a 32-byte key"))
+    }
+
+    /// A signed-in account, and the cookie the real router authenticates it by.
+    async fn db_account(pool: &PgPool) -> (Uuid, String) {
+        let id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, google_sub, email, name) VALUES ($1, $2, $3, $4)")
+            .bind(id)
+            .bind(format!("disconnect-sub-{id}"))
+            .bind(format!("disconnect-{id}@example.test"))
+            .bind("Disconnect Test")
+            .execute(pool)
+            .await
+            .expect("insert user");
+        sqlx::query("INSERT INTO sessions (id, user_id, expires_at) VALUES ($1, $2, $3)")
+            .bind(session_id)
+            .bind(id)
+            .bind(Utc::now() + Duration::hours(1))
+            .execute(pool)
+            .await
+            .expect("insert session");
+        (id, format!("strands_session={session_id}"))
+    }
+
+    /// The real router over a real pool: the disconnect route is what the spec
+    /// names, so the tests drive the route, not the handler function.
+    fn db_app(pool: &PgPool, key: Arc<SecretKey>) -> Router {
+        let state = AppState::new(
+            pool.clone(),
+            AuthConfig {
+                client_id: "unused-client-id".into(),
+                issuer: "https://identity.example".into(),
+                public_base_url: "https://test.example".into(),
+                cookie_secure: true,
+                session_ttl_days: 30,
+            },
+            Arc::new(NoopIdentity),
+            Arc::new(build_registry(pool.clone(), Some(key.clone()), None, false)),
+            Arc::new(NeverSummarized),
+        )
+        .with_secrets(key);
+        crate::app::router(state)
+    }
+
+    /// One connector row in the state `connect` leaves behind, plus the sealed
+    /// token row a pick reads — exactly what a disconnect has to undo.
+    async fn connected_row(pool: &PgPool, user: Uuid, kind: &str, key: &SecretKey) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO connectors (id, user_id, kind, status) VALUES ($1, $2, $3, 'connected')",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(kind)
+        .execute(pool)
+        .await
+        .expect("insert connector");
+
+        let sealed = key.seal(user, b"ya29.disconnect-test").expect("seal token");
+        sqlx::query(
+            "INSERT INTO connector_secrets (connector_id, user_id, ciphertext, key_version)
+             VALUES ($1, $2, $3, 2)",
+        )
+        .bind(id)
+        .bind(user)
+        .bind(sealed)
+        .execute(pool)
+        .await
+        .expect("insert sealed token");
+
+        id
+    }
+
+    async fn sealed_rows(pool: &PgPool, connector_id: Uuid) -> i64 {
+        sqlx::query_scalar("SELECT count(*) FROM connector_secrets WHERE connector_id = $1")
+            .bind(connector_id)
+            .fetch_one(pool)
+            .await
+            .expect("count sealed rows")
+    }
+
+    async fn row_status(pool: &PgPool, connector_id: Uuid) -> String {
+        sqlx::query_scalar("SELECT status::text FROM connectors WHERE id = $1")
+            .bind(connector_id)
+            .fetch_one(pool)
+            .await
+            .expect("read connector status")
+    }
+
+    async fn post_disconnect(app: &Router, cookie: &str) -> axum::http::Response<Body> {
+        app.clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/connectors/photos/disconnect")
+                    .header(axum::http::header::COOKIE, cookie)
+                    .body(Body::empty())
+                    .expect("build request"),
+            )
+            .await
+            .expect("router response")
+    }
+
+    async fn summary_body(response: axum::http::Response<Body>) -> ConnectorSummary {
+        let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .expect("read body");
+        serde_json::from_slice(&bytes).expect("the body is a connector summary")
+    }
+
+    /// B4 acceptance: disconnecting Google Photos deletes the sealed token, the
+    /// row reads Not connected, and no other connector's rows are touched.
+    #[tokio::test]
+    async fn disconnect_clears_photos_token() {
+        let Some(pool) = pool_or_skip("connectors::tests::disconnect_clears_photos_token").await
+        else {
+            return;
+        };
+        let (user, cookie) = db_account(&pool).await;
+        let key = db_key();
+        let app = db_app(&pool, Arc::clone(&key));
+
+        let photos = connected_row(&pool, user, crate::photos::CONNECTOR_KIND, key.as_ref()).await;
+        let whatsapp = connected_row(&pool, user, "whatsapp", key.as_ref()).await;
+
+        let response = post_disconnect(&app, &cookie).await;
+        assert_eq!(response.status(), StatusCode::OK, "disconnect answers 200");
+
+        let summary = summary_body(response).await;
+        assert_eq!(summary.id, "photos");
+        assert_eq!(summary.status, Some(WireStatus::Disconnected));
+        assert!(
+            summary.error.is_none(),
+            "a clean revoke has nothing to report: {:?}",
+            summary.error
+        );
+
+        assert_eq!(
+            sealed_rows(&pool, photos).await,
+            0,
+            "the sealed Google Photos token must be gone"
+        );
+        assert_eq!(row_status(&pool, photos).await, "disconnected");
+        let last_error: Option<String> =
+            sqlx::query_scalar("SELECT last_error FROM connectors WHERE id = $1")
+                .bind(photos)
+                .fetch_one(&pool)
+                .await
+                .expect("read last_error");
+        assert!(last_error.is_none(), "the purge clears last_error too");
+
+        // The other connector is untouched: its row still says connected and
+        // its own sealed row is still there.
+        assert_eq!(row_status(&pool, whatsapp).await, "connected");
+        assert_eq!(sealed_rows(&pool, whatsapp).await, 1);
+    }
+
+    /// B4 acceptance: a second disconnect is a no-op — same body, nothing left
+    /// to purge, no error.
+    #[tokio::test]
+    async fn second_disconnect_is_a_no_op() {
+        let Some(pool) = pool_or_skip("connectors::tests::second_disconnect_is_a_no_op").await
+        else {
+            return;
+        };
+        let (user, cookie) = db_account(&pool).await;
+        let key = db_key();
+        let app = db_app(&pool, Arc::clone(&key));
+        let photos = connected_row(&pool, user, crate::photos::CONNECTOR_KIND, key.as_ref()).await;
+
+        let first = post_disconnect(&app, &cookie).await;
+        assert_eq!(first.status(), StatusCode::OK);
+        drop(summary_body(first).await);
+
+        let second = post_disconnect(&app, &cookie).await;
+        assert_eq!(
+            second.status(),
+            StatusCode::OK,
+            "disconnecting again is not an error"
+        );
+        let summary = summary_body(second).await;
+        assert_eq!(summary.status, Some(WireStatus::Disconnected));
+        assert!(summary.error.is_none(), "got: {:?}", summary.error);
+
+        assert_eq!(sealed_rows(&pool, photos).await, 0);
+        assert_eq!(row_status(&pool, photos).await, "disconnected");
     }
 }

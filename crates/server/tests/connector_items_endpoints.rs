@@ -128,8 +128,8 @@ impl Connector for TestLedgerConnector {
         })
     }
 
-    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Ok(())
+    fn disconnect<'a>(&'a self, _user: Uuid) -> ConnectorFuture<'a, Result<(), ConnectorError>> {
+        Box::pin(async { Ok(()) })
     }
 }
 

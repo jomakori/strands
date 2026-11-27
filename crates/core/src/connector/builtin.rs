@@ -58,8 +58,8 @@ impl Connector for StubConnector {
         })
     }
 
-    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Ok(())
+    fn disconnect<'a>(&'a self, _user: Uuid) -> ConnectorFuture<'a, Result<(), ConnectorError>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -103,8 +103,8 @@ impl Connector for FailingConnector {
         Box::pin(async { Err(ConnectorError("upstream service is unreachable".to_owned())) })
     }
 
-    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Err(ConnectorError("upstream service is unreachable".to_owned()))
+    fn disconnect<'a>(&'a self, _user: Uuid) -> ConnectorFuture<'a, Result<(), ConnectorError>> {
+        Box::pin(async { Err(ConnectorError("upstream service is unreachable".to_owned())) })
     }
 }
 
@@ -159,11 +159,13 @@ impl Connector for PlaceholderConnector {
         Box::pin(async move { Err(ConnectorError(format!("{label} is not yet implemented"))) })
     }
 
-    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Err(ConnectorError(format!(
-            "{} is not yet implemented",
-            self.manifest.label
-        )))
+    fn disconnect<'a>(&'a self, _user: Uuid) -> ConnectorFuture<'a, Result<(), ConnectorError>> {
+        Box::pin(async move {
+            Err(ConnectorError(format!(
+                "{} is not yet implemented",
+                self.manifest.label
+            )))
+        })
     }
 }
 

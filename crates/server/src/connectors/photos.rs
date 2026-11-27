@@ -151,9 +151,43 @@ impl Connector for PhotosConnector {
         })
     }
 
-    fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
-        Err(ConnectorError(
-            "disconnecting Google Photos needs the account screen; it is not wired here".to_owned(),
-        ))
+    /// Revoke the stored grant and put the row back to not-connected (ticket
+    /// B4).
+    ///
+    /// Reuses the purge the WhatsApp unlink owns — the sealed token row deleted
+    /// and the connector row marked `disconnected` in one transaction — so the
+    /// two connectors cannot drift apart, and `status` never meets a row that
+    /// claims a connection the store cannot back.
+    ///
+    /// Idempotent by construction: a user who never connected has no row, and a
+    /// row already purged has nothing sealed, so both answer `Ok(())`. That is
+    /// what lets a client retry a failed revoke instead of inventing state.
+    fn disconnect<'a>(&'a self, user: Uuid) -> ConnectorFuture<'a, Result<(), ConnectorError>> {
+        Box::pin(async move {
+            let row: Option<(Uuid,)> =
+                sqlx::query_as("SELECT id FROM connectors WHERE user_id = $1 AND kind = $2")
+                    .bind(user)
+                    .bind(CONNECTOR_KIND)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(|error| {
+                        ConnectorError(format!("read the Google Photos connector row: {error}"))
+                    })?;
+
+            let Some((connector_id,)) = row else {
+                return Ok(());
+            };
+
+            if let Err(error) = crate::whatsapp::store::disconnect(&self.pool, connector_id).await {
+                // The purge detail stays in the log: `status`/`disconnect`
+                // answers go to a browser, and a failed DELETE is our fault.
+                tracing::error!(?error, "purging the Google Photos grant failed");
+                return Err(ConnectorError(
+                    "could not revoke access; try disconnecting again".to_owned(),
+                ));
+            }
+
+            Ok(())
+        })
     }
 }
