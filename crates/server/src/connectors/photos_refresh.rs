@@ -10,7 +10,11 @@
 //! * a grant Google no longer honours is not retried. The connector is marked
 //!   `error` with a message that says what to do, and the caller gets a `400`
 //!   saying the same thing — a `503` would read as "try again later", which is
-//!   never true for a revoked grant.
+//!   never true for a revoked grant;
+//! * a connector already in `error` is answered from the row alone: no token is
+//!   opened and no refresh is attempted, because the grant behind it is the one
+//!   Google refused. Only a reconnect replaces that grant, so retrying here
+//!   would spend a request on Google for every pick and still answer `400`.
 //!
 //! Both the read and the write are keyed on the owning `user_id`: the token is
 //! sealed under that account's key, and a query that did not carry the id could
@@ -74,7 +78,9 @@ async fn refresh_if_expired(
     };
 
     // A row already reported as broken is not retried: a refresh token Google
-    // refused does not come back by asking again.
+    // refused does not come back by asking again, so the answer is the same
+    // `400` the refresh that broke it would have produced, with no token read
+    // and no call to Google. A reconnect is what clears this state.
     match row.status.as_str() {
         "connected" => {}
         "error" => return Err(AppError::BadRequest(RECONNECT_REQUIRED.to_owned())),
@@ -116,16 +122,9 @@ async fn refresh_if_expired(
                 expires_at: tokens.expires_at,
             };
             oauth::store_tokens(pool, key, row.connector_id, user_id, &stored).await?;
-            // A successful refresh clears an earlier error, so a connection
-            // that was marked broken comes back on its own.
-            sqlx::query(
-                "UPDATE connectors SET status = 'connected', last_error = NULL \
-                  WHERE id = $1 AND user_id = $2",
-            )
-            .bind(row.connector_id)
-            .bind(user_id)
-            .execute(pool)
-            .await?;
+            // The row was `connected` to get this far and stays that way: the
+            // `error` gate above is the only thing that reads a broken row, so
+            // there is no earlier failure here to clear.
             Ok(stored.access_token)
         }
         Err(RefreshError::Revoked) => {
@@ -213,6 +212,7 @@ fn protocol(error: SecretError) -> sqlx::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
     use std::time::Duration as StdDuration;
 
@@ -490,6 +490,24 @@ mod tests {
         connector_id
     }
 
+    /// The message an earlier refusal left on the row, quoted back by the test to
+    /// prove a retry does not rewrite it.
+    const EARLIER_FAILURE: &str = "the Google Photos grant was revoked; reconnect it from Settings";
+
+    /// A connector the refresh path already gave up on: the row B3 leaves behind
+    /// after Google refused the grant. The token row is still the stale one and
+    /// still carries a refresh token, so a retry would find everything it needs.
+    async fn broken_connection(pool: &PgPool, key: &SecretKey, user: UserId) -> Uuid {
+        let connector_id = stale_connection(pool, key, user).await;
+        sqlx::query("UPDATE connectors SET status = 'error', last_error = $2 WHERE id = $1")
+            .bind(connector_id)
+            .bind(EARLIER_FAILURE)
+            .execute(pool)
+            .await
+            .expect("mark the connector error");
+        connector_id
+    }
+
     /// A stub token endpoint that answers once and reports the form it received.
     async fn token_stub(
         status: &'static str,
@@ -673,5 +691,98 @@ mod tests {
             .expect("read tokens")
             .expect("the row still exists");
         assert_eq!(stored.access_token, "ya29.stale-access");
+    }
+
+    /// B3's error state: a connector already marked `error` is answered from the
+    /// row alone. The same `400` comes back, Google's token endpoint is not
+    /// asked again, and nothing the earlier failure wrote is overwritten.
+    #[tokio::test]
+    async fn error_connection_is_not_retried() {
+        let Some(pool) =
+            pool_or_skip("connectors::photos_refresh::tests::error_connection_is_not_retried")
+                .await
+        else {
+            return;
+        };
+        let user = account(&pool).await;
+        let key = key();
+
+        // A token endpoint that would answer a refresh happily. It is reachable
+        // and correct, so a `400` below can only come from not asking it.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind stub");
+        let origin = format!(
+            "http://{}",
+            listener.local_addr().expect("stub local address")
+        );
+        let asked = Arc::new(AtomicBool::new(false));
+        let answered = Arc::clone(&asked);
+        let stub = tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            // Set before the answer is written, so the caller returning from the
+            // request proves this flag is already visible: no timer needed.
+            answered.store(true, Ordering::SeqCst);
+            // Drain the request first: closing a socket with unread bytes in it
+            // resets the connection and the client would never see the answer.
+            let _ = read_request(&mut socket).await;
+            let body = r#"{"access_token":"ya29.should-never-be-minted","expires_in":3600,"token_type":"Bearer"}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        });
+
+        let picker = RecordingPicker::new();
+        let app = app(&pool, Arc::clone(&key), oauth(&origin), picker.clone());
+        let connector_id = broken_connection(&pool, &key, user.id).await;
+
+        let response = post(&app, SESSIONS, &user).await;
+        let status = response.status();
+        let body = body_text(response).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "a broken connector is still the person's to fix: {body}"
+        );
+        assert!(
+            body.to_lowercase().contains("reconnect"),
+            "the answer must say what to do: {body}"
+        );
+
+        assert!(
+            picker.tokens().is_empty(),
+            "no pick may start on a token that cannot be refreshed"
+        );
+        assert!(
+            !asked.load(Ordering::SeqCst),
+            "a connector already marked error must not reach Google's token endpoint"
+        );
+
+        // The row keeps the failure the refresh recorded: nothing cleared it and
+        // nothing replaced the token a reconnect is meant to replace.
+        let (status, last_error): (String, Option<String>) =
+            sqlx::query_as("SELECT status::text, last_error FROM connectors WHERE id = $1")
+                .bind(connector_id)
+                .fetch_one(&pool)
+                .await
+                .expect("read connector");
+        assert_eq!(
+            status, "error",
+            "the connector stays broken until a reconnect"
+        );
+        assert_eq!(
+            last_error.as_deref(),
+            Some(EARLIER_FAILURE),
+            "the recorded failure is left exactly as the refusal wrote it"
+        );
+        let stored = oauth::load_tokens(&pool, &key, connector_id, user.id)
+            .await
+            .expect("read tokens")
+            .expect("the row still exists");
+        assert_eq!(stored.access_token, "ya29.stale-access");
+
+        stub.abort();
     }
 }
