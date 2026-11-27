@@ -192,6 +192,15 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --lib "connectors::photos_connect::tests"
 
+      # B3: the refresh path is a DB-gated lib test — it seeds a lapsed token
+      # row, redeems a stub refresh token and reads the re-sealed row back — so
+      # it runs here, where Postgres exists, instead of skipping in the job
+      # above.
+      - name: Run the Google Photos refresh tests
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --lib "connectors::photos_refresh::tests"
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest

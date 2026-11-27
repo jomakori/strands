@@ -161,6 +161,68 @@ impl PhotosOAuth {
                 .map(|seconds| Utc::now() + Duration::seconds(seconds.max(0))),
         })
     }
+
+    /// Redeem a refresh token for a fresh access token (ticket B3).
+    ///
+    /// Google rotates the refresh token only occasionally, so an answer that
+    /// omits one means "keep the one you have", not "you no longer have one".
+    pub async fn refresh(&self, refresh_token: &str) -> Result<ConnectorTokens, RefreshError> {
+        let response = self
+            .http
+            .post(&self.endpoints.token_url)
+            .form(&[
+                ("client_id", self.client_id.as_str()),
+                ("client_secret", self.client_secret.as_str()),
+                ("refresh_token", refresh_token),
+                ("grant_type", "refresh_token"),
+            ])
+            .send()
+            .await
+            .map_err(|error| RefreshError::Transport(error.to_string()))?;
+
+        if !response.status().is_success() {
+            // Google answers 400 `invalid_grant` for a revoked or lapsed grant:
+            // only the person can fix that, by connecting again.
+            return Err(RefreshError::Revoked);
+        }
+
+        let grant: TokenResponse = response.json().await.map_err(|error| {
+            RefreshError::Transport(format!("token response was not JSON: {error}"))
+        })?;
+        let access_token = grant.access_token.ok_or(RefreshError::NoToken)?;
+        Ok(ConnectorTokens {
+            access_token,
+            refresh_token: grant.refresh_token,
+            expires_at: grant
+                .expires_in
+                .map(|seconds| Utc::now() + Duration::seconds(seconds.max(0))),
+        })
+    }
+}
+
+/// Why a refresh could not finish. Separate from [`ConnectError`] so the caller
+/// can tell "the grant is gone" (mark the connector, ask for a reconnect) from
+/// "the endpoint was unreachable" (leave the row alone, try again later).
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum RefreshError {
+    #[error("Google Photos revoked this connection; reconnect it from Settings")]
+    Revoked,
+    #[error("the token response carried no access token")]
+    NoToken,
+    #[error("the token endpoint could not be reached: {0}")]
+    Transport(String),
+}
+
+impl From<RefreshError> for AppError {
+    fn from(error: RefreshError) -> Self {
+        match error {
+            RefreshError::Transport(detail) => AppError::internal(
+                "Google Photos token endpoint",
+                sqlx::Error::Protocol(detail),
+            ),
+            other => AppError::BadRequest(other.to_string()),
+        }
+    }
 }
 
 /// Why a callback could not finish. Named variants because the test asserts on

@@ -9,10 +9,12 @@
 pub mod ledger;
 mod photos;
 mod photos_connect;
+mod photos_refresh;
 mod whatsapp;
 
 pub use photos::PhotosConnector;
 pub use photos_connect::PhotosOAuth;
+pub use photos_refresh::access_token as photos_access_token;
 pub use whatsapp::WhatsAppConnector;
 
 use std::sync::Arc;
