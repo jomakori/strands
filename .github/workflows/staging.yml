@@ -1,24 +1,5 @@
 name: staging
 
-# One workflow owns the staging environment for a pull request; the `staging`
-# label is the only input a maintainer needs:
-#
-#   label added       build ghcr.io/jomakori/strands:pr-<N>, then point
-#                     jomakori/gke_GitOps at it: enable=true, tag=pr-<N>
-#   label removed     enable=false, tag="0.0.0" — only while staging still runs
-#                     this pull request's tag, so the first of two labelled pull
-#                     requests to close cannot unpin the other one
-#   pull request closed
-#                     the same unpin, so a merge or a close never leaves the host
-#                     pointing at a branch that no longer exists
-#
-# The registry confirms the pushed tag (`docker manifest inspect`) before the
-# values move, so staging can never name an image that does not resolve.
-#
-# Fork pull requests are skipped: their token is read-only, so they cannot push
-# an image and must never move staging. No label is created or deleted here;
-# `staging` is applied and removed by a maintainer.
-
 on:
   pull_request:
     types: [opened, reopened, synchronize, labeled, unlabeled, closed]
@@ -29,8 +10,6 @@ permissions:
 jobs:
   build:
     name: Build the staging image
-    # A pull request without the label has nothing to build, and a close only
-    # unpins. Fork heads stay out: their token cannot push to this namespace.
     if: >-
       github.event.action != 'closed' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -55,9 +34,6 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}"
           | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      # Native arm64 runner, so no QEMU: the same platform and the same
-      # Dockerfile the release builds. GIT_COMMIT is the commit actually built
-      # — the merge result — which is what /healthz reports.
       - name: Build and push the staging image
         run: |
           docker buildx build \
@@ -69,16 +45,12 @@ jobs:
             --tag "${IMAGE}:pr-${PR_NUMBER}" \
             .
 
-      # The registry is the only witness that the push landed. A tag that does
-      # not resolve fails this job, and `deploy` then never runs.
       - name: Confirm the tag resolves in the registry
         run: docker manifest inspect "${IMAGE}:pr-${PR_NUMBER}" >/dev/null
 
   deploy:
     name: Pin or unpin staging
     needs: build
-    # Explicit result checks: `always()` sees a skipped build (close, unlabel),
-    # and a label whose build failed must never reach the GitOps values.
     if: |
       always() &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -89,9 +61,6 @@ jobs:
       )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # Serialized across every pull request — one staging host, one writer — and
-    # never cancelled: each run edits the head it reads, and a cancelled unpin
-    # would leave staging pinned to a closed branch.
     concurrency:
       group: staging-deploy
       cancel-in-progress: false
@@ -111,8 +80,7 @@ jobs:
             message="chore(strands): unpin staging"
           fi
 
-          # The token rides in a header, not the clone URL, so a failed git
-          # command cannot print it into the run log.
+          # allow: the token rides in a header, never the clone URL, so a failed git command cannot print it
           auth="$(printf 'x-access-token:%s' "${GITOPS_TOKEN}" | base64 -w0)"
           gitops() { git -c http.extraheader="Authorization: Basic ${auth}" "$@"; }
 
@@ -121,9 +89,7 @@ jobs:
             "https://github.com/${GITOPS_REPO}.git" "${checkout}"
           cd "${checkout}"
 
-          # A release can pin production while this run waits, so every attempt
-          # starts from whatever main now is and reapplies the edit against it:
-          # a lost push race retries, it never rebases by hand.
+          # allow: a release can pin production while this waits, so each attempt resets to origin/main and reapplies
           for attempt in 1 2 3 4 5; do
             gitops fetch --quiet --depth 1 origin main
             git reset --quiet --hard FETCH_HEAD
@@ -137,10 +103,8 @@ jobs:
           tag = own if mode == "pin" else '"0.0.0"'
           enable = "true" if mode == "pin" else "false"
 
-
           def indent(line):
               return len(line) - len(line.lstrip())
-
 
           def block(lines, key, level, lo, hi):
               """Index range of the block nested under `key:` at column `level`."""
@@ -154,7 +118,6 @@ jobs:
                       return k, end
               raise SystemExit(f"no {key}: at indent {level} in the values files")
 
-
           def locate(lines, path, name):
               level, lo, hi = 0, 0, len(lines)
               for key in path:
@@ -167,15 +130,10 @@ jobs:
                   raise SystemExit(f"{name}: is not at indent {level}")
               return hits[0]
 
-
           def load(rel):
               with open(f"{root}/{rel}") as handle:
                   return handle.readlines()
 
-
-          # Staging belongs to the pull request whose tag it runs; any other tag
-          # means another labelled pull request owns it and this run must not
-          # touch it.
           helm_path = ("strands", "environments", "staging")
           helm = load("apps/helm/values.yaml")
           index = locate(helm, helm_path, "tag")
