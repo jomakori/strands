@@ -17,7 +17,6 @@ repos:
     hooks:
       - id: cargo-fmt
         name: cargo fmt --all -- --check
-        description: Parse + style every workspace member.
         entry: cargo fmt --all -- --check
         language: system
         pass_filenames: false
@@ -25,7 +24,6 @@ repos:
 
       - id: cargo-check
         name: cargo check -p strands-core -p strands-server
-        description: Type-check the members that compile for the host target.
         entry: cargo check -p strands-core -p strands-server --all-targets
         language: system
         pass_filenames: false
@@ -33,7 +31,6 @@ repos:
 
       - id: cargo-clippy
         name: cargo clippy -p strands-core -p strands-server -- -D warnings
-        description: Lint the host-target members under -D warnings.
         entry: cargo clippy -p strands-core -p strands-server --all-targets -- -D warnings
         language: system
         pass_filenames: false
