@@ -5,6 +5,7 @@ use strands_api_types::ConnectorSummary;
 
 use crate::api;
 use crate::nav::ScreenHead;
+use crate::photos_pick;
 use crate::routes::Route;
 use crate::settings::StatusChip;
 use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
@@ -82,11 +83,19 @@ fn ConnectorPanel(summary: ConnectorSummary) -> Element {
             if let Some(error) = &summary.error {
                 p { class: "connector-error", "data-connector-error": "true", "{error}" }
             }
-            Link {
-                class: "button connector-import-link",
-                "data-testid": "connector-import-link",
-                to: Route::ImportWizard { id: summary.id.clone() },
-                "Import…"
+            // Photos has no preview to browse: picking in Google's UI *is* the
+            // import, so this screen carries the pick panel instead of the
+            // `Import…` link, whose preview/import routes answer 503 for this
+            // connector by design.
+            if summary.id == photos_pick::PHOTOS_CONNECTOR_ID {
+                photos_pick::PhotoPicker { status: summary.status }
+            } else {
+                Link {
+                    class: "button connector-import-link",
+                    "data-testid": "connector-import-link",
+                    to: Route::ImportWizard { id: summary.id.clone() },
+                    "Import…"
+                }
             }
         }
     }

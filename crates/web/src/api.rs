@@ -16,9 +16,9 @@ use serde::de::DeserializeOwned;
 use strands_api_types::{
     CategorySummary, ConnectorHistory, ConnectorImportRequest, ConnectorImportResult,
     ConnectorPreview, ConnectorSummary, EditSummaryRequest, GenerateSummaryRequest,
-    JudgeLinksResponse, LinkSummary, NewTag, NewThread, Profile, SearchResult, SummaryHistory,
-    SummaryVersion, TagDetail, TagSummary, ThreadDetail, ThreadSummary, WhatsAppImportReport,
-    WhatsAppStatus,
+    JudgeLinksResponse, LinkSummary, NewTag, NewThread, PhotoPickResult, PhotoSession, Profile,
+    SearchResult, SummaryHistory, SummaryVersion, TagDetail, TagSummary, ThreadDetail,
+    ThreadSummary, WhatsAppImportReport, WhatsAppStatus,
 };
 use uuid::Uuid;
 
@@ -252,6 +252,29 @@ pub async fn whatsapp_sync() -> Result<WhatsAppImportReport, ApiError> {
 /// session.
 pub async fn whatsapp_disconnect() -> Result<WhatsAppStatus, ApiError> {
     post_no_body("/api/v1/whatsapp/disconnect").await
+}
+
+/// Where the Google Photos grant starts. Rendered as a link, not fetched: the
+/// route answers with a 302 into Google's consent screen, which only a browser
+/// navigation can follow.
+pub const PHOTOS_CONNECT_PATH: &str = "/api/v1/connectors/google_photos/connect";
+
+/// `POST /api/v1/connectors/photos/sessions` — open one Google Photos pick.
+///
+/// This is the whole handoff: the answer carries the `picker_uri` the user
+/// opens in Google's own UI, and the session id to poll. There is no preview or
+/// import call in front of it — a pick *is* the import.
+pub async fn photos_start_pick() -> Result<PhotoSession, ApiError> {
+    post_no_body("/api/v1/connectors/photos/sessions").await
+}
+
+/// `GET /api/v1/connectors/photos/sessions/{id}` — where one pick stands.
+///
+/// Called on a timer for as long as a pick is open: `pending` means the user is
+/// still in Google's picker, `imported`/`empty` end the wait, and `expired`
+/// answers with the replacement session to keep polling.
+pub async fn photos_pick(session_id: &str) -> Result<PhotoPickResult, ApiError> {
+    get_json(&format!("/api/v1/connectors/photos/sessions/{session_id}")).await
 }
 
 /// The QR URL for one payload.

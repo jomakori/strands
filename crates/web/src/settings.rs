@@ -21,6 +21,7 @@ use strands_api_types::{
 
 use crate::api;
 use crate::nav::ScreenHead;
+use crate::photos_pick;
 use crate::routes::Route;
 use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 
@@ -114,6 +115,10 @@ fn ConnectorList(summaries: Vec<ConnectorSummary>) -> Element {
                     // endpoint: the registry summary is a snapshot, and pairing
                     // happens after it was taken.
                     WhatsAppRow { key: "{summary.id}", summary: summary.clone() }
+                } else if summary.id == photos_pick::PHOTOS_CONNECTOR_ID {
+                    // Photos carries its pick panel on the row itself: it has no
+                    // preview to browse, so the row is where the import happens.
+                    PhotosRow { key: "{summary.id}", summary: summary.clone() }
                 } else {
                     ConnectorRow { key: "{summary.id}", summary: summary.clone() }
                 }
@@ -165,6 +170,42 @@ fn ConnectorRow(summary: ConnectorSummary) -> Element {
             if let Some(error) = &summary.error {
                 p { class: "connector-error", "data-connector-error": "true", "{error}" }
             }
+        }
+    }
+}
+
+/// The Photos row (B5): the registry summary, then the pick panel.
+///
+/// The panel is on the row rather than behind the connector screen because a
+/// pick has nothing to preview — the user starts it, picks in Google's UI, and
+/// the notes appear. The row still links to the screen (for scopes and the
+/// disconnect action); the pick lives here as well so the common case is one
+/// tap from Settings.
+#[component]
+fn PhotosRow(summary: ConnectorSummary) -> Element {
+    rsx! {
+        article { class: "connector-row connector-photos", "data-connector-id": "{summary.id}",
+            role: "listitem",
+            div { class: "connector-head",
+                Link {
+                    class: "connector-open",
+                    to: Route::ConnectorScreen { id: summary.id.clone() },
+                    "aria-label": "Open {summary.label}",
+                    span { class: "connector-label", "{summary.label}" }
+                }
+                StatusChip { status: summary.status, has_error: summary.error.is_some() }
+            }
+            if !summary.scopes.is_empty() {
+                ul { class: "connector-scopes", "aria-label": "Scopes",
+                    for scope in summary.scopes.iter() {
+                        li { class: "connector-scope", "{scope}" }
+                    }
+                }
+            }
+            if let Some(error) = &summary.error {
+                p { class: "connector-error", "data-connector-error": "true", "{error}" }
+            }
+            photos_pick::PhotoPicker { status: summary.status }
         }
     }
 }

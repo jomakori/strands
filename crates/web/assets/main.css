@@ -2181,6 +2181,112 @@ button {
   color: var(--danger);
 }
 
+/* ---------- the Google Photos pick (B5) ---------- */
+
+/* The panel sits inside the connector row, under the head and the scopes. It is a column so the
+ * receipt and the item list can each be as tall as they need on a 390px screen without the row
+ * having to guess. */
+.photo-picker {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.photo-pick-waiting {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.photo-pick-open,
+.photo-pick-start,
+.photo-connect {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.photo-pick-open:hover,
+.photo-pick-start:hover,
+.photo-connect:hover {
+  border-color: var(--accent);
+}
+
+.photo-pick-start:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.photo-pick-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.photo-pick-line {
+  margin: 0;
+  color: var(--reading);
+  font-size: 14px;
+}
+
+.photo-pick-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One row per tag the picked notes were filed under. The rows wrap rather than scroll: a pick can
+ * land in several tags and a sideways scroller would hide them at 390px. */
+.photo-pick-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.photo-pick-tag {
+  color: var(--fg);
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+
+.photo-pick-tag:hover {
+  color: var(--accent);
+}
+
+.photo-pick-count {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* ---------- new strand: the + and its sheet (T31) ---------- */
 
 /* The grid's one create affordance: a 56px circle 24px off the right edge, lifted clear of the
