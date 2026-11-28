@@ -7,12 +7,16 @@ import { awaitSplashGone } from "../support/splash";
 // boundary the way `settings.spec.ts` and `import-wizard.spec.ts` do (the visual
 // job serves the release bundle statically, with no server behind it):
 //
-//   items listed     the pick's tags arrive as rows, each opening its own tag;
-//                    a receipt names the counts the server reported
-//   import dedupes   a repeat pick reports its skips and adds no second row
-//   503 unreachable  no control leads to `…/connectors/photos/preview` or
-//                    `/import`, whose only answer for this connector is 503 —
-//                    the stub records every such hit and the tests assert none
+//   items listed     the pick's photos arrive as one row per photo — the note it
+//                    became, its caption, and the tag it was filed under, each
+//                    opening that tag; a receipt names the counts
+//   import dedupes   a repeat pick lists the same photos marked already here,
+//                    adds no second row, and writes nothing
+//   503 unreachable  no UI path reaches `…/connectors/photos/preview` or
+//                    `…/connectors/photos/import`, whose only answer for this
+//                    connector is 503 — including a direct visit to the wizard
+//                    route, which shows the pick instead of asking for a preview.
+//                    The stub records every such hit and the tests assert none.
 //
 // The picker itself (Google's window, the download URLs) cannot be exercised
 // here; `crates/server/tests/photos_picker.rs` owns that against a real
@@ -66,30 +70,57 @@ const FOOD = {
   created_at: "2026-11-28T04:00:01Z",
 };
 
-/** Still open in Google's picker: keep waiting. */
-const PENDING = { state: "pending", session: null, notes_created: 0, notes_skipped: 0, tags: [] };
+/** The two photos a pick turns into — distinct notes, distinct tags. */
+const ITEMS = [
+  {
+    note_id: "6b2d4f80-0000-4000-8000-000000000301",
+    title: "Sunrise over the bay",
+    tag_id: TRAVEL.id,
+    created: true,
+  },
+  {
+    note_id: "6b2d4f80-0000-4000-8000-000000000302",
+    title: "Breakfast at the market",
+    tag_id: FOOD.id,
+    created: true,
+  },
+];
 
-/** Two photos landed, filed under two tags. */
+/** Still open in Google's picker: keep waiting. */
+const PENDING = {
+  state: "pending",
+  session: null,
+  notes_created: 0,
+  notes_skipped: 0,
+  tags: [],
+  items: [],
+};
+
+/** Two photos landed, filed under two tags — one row per photo. */
 const IMPORTED = {
   state: "imported",
   session: null,
   notes_created: 2,
   notes_skipped: 0,
   tags: [TRAVEL, FOOD],
+  items: ITEMS,
 };
 
-/** The same two photos picked again: nothing written, both skipped. */
+/** The same two photos picked again: nothing written, both skipped, both listed. */
 const REPEAT = {
   state: "imported",
   session: null,
   notes_created: 0,
   notes_skipped: 2,
   tags: [TRAVEL, FOOD],
+  items: ITEMS.map((item) => ({ ...item, created: false })),
 };
 
-/** The exact body `crates/server/src/connectors/photos.rs` answers these with. */
-const PICK_ONLY_503 =
-  "Google Photos only imports through a pick; open Settings → Google Photos and pick there.";
+/** The server's own refusal, quoted from `crates/server/src/connectors/photos.rs`. */
+const PICK_ONLY_503 = {
+  preview: "Google Photos only imports through a pick; there is nothing to preview",
+  import: "Google Photos only imports through a pick; there is nothing to sync",
+};
 
 type Stubs = {
   connectors?: unknown[];
@@ -137,10 +168,13 @@ async function stubApi(page: Page, stubs: Stubs = {}) {
       polls += 1;
       return fulfill(route, 200, stubs.poll ? stubs.poll() : PENDING);
     }
-    if (path.endsWith("/preview") || path.endsWith("/import")) {
-      const bucket = path.endsWith("/preview") ? hits.preview : hits.import;
-      bucket.push(path);
-      return fulfill(route, 503, { error: PICK_ONLY_503 });
+    if (path.endsWith("/preview")) {
+      hits.preview.push(path);
+      return fulfill(route, 503, { error: PICK_ONLY_503.preview });
+    }
+    if (path.endsWith("/import")) {
+      hits.import.push(path);
+      return fulfill(route, 503, { error: PICK_ONLY_503.import });
     }
     return fulfill(route, 200, []);
   });
@@ -160,10 +194,16 @@ async function openSettings(page: Page) {
   await expect(page).toHaveURL(/\/settings$/);
 }
 
+/** No UI path may reach the pair whose only answer for photos is 503. */
+function assertNoDeadEnds(stub: { hits: { preview: string[]; import: string[] } }) {
+  expect(stub.hits.preview, "no preview call may reach the 503").toEqual([]);
+  expect(stub.hits.import, "no import call may reach the 503").toEqual([]);
+}
+
 test.describe("photos picker at 390px", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("starts a pick, lists what arrived, and reports the receipt", async ({
+  test("starts a pick, lists every photo, and reports the receipt", async ({
     page,
   }) => {
     let polled = 0;
@@ -181,7 +221,7 @@ test.describe("photos picker at 390px", () => {
     );
     // The generic import entry is gone from this connector's row: it is the
     // control whose only answer is the 503 below.
-    await expect(row.locator('[data-testid="connector-import-link"]')).toHaveCount(0);
+    await expect(row.locator('a[href$="/import"]')).toHaveCount(0);
 
     await row.locator('[data-testid="photos-start-pick"]').click();
 
@@ -198,19 +238,26 @@ test.describe("photos picker at 390px", () => {
     });
     await expect(receipt).toContainText("Imported 2 photos.");
 
-    // Items listed: one row per tag the notes were filed under, each a link.
+    // Items listed: one row per picked photo — its own note, caption and tag.
     const items = row.locator('[data-testid="photos-picked-item"]');
-    await expect(items).toHaveCount(2);
+    await expect(items).toHaveCount(ITEMS.length);
+    for (const [index, item] of ITEMS.entries()) {
+      const line = items.nth(index);
+      await expect(line).toHaveAttribute("data-note-id", item.note_id);
+      await expect(line).toHaveAttribute("data-item-created", "true");
+      await expect(line).toContainText(item.title);
+      const tag = line.locator('[data-testid="photos-picked-item-tag"]');
+      await expect(tag).toHaveAttribute("href", `/tags/${item.tag_id}`);
+    }
     await expect(items.nth(0)).toContainText("Travel");
     await expect(items.nth(1)).toContainText("Food");
-    await expect(items.nth(0).locator("a")).toHaveAttribute(
-      "href",
-      new RegExp(`/tags/${TRAVEL.id}$`),
-    );
+    // A first pick is all new: nothing reads as already here.
+    await expect(
+      row.locator('[data-testid="photos-picked-item"]').filter({ hasText: "already here" }),
+    ).toHaveCount(0);
 
     expect(stub.polls(), "the open pick is polled until it lands").toBeGreaterThan(0);
-    expect(stub.hits.preview, "no preview call from the photos row").toEqual([]);
-    expect(stub.hits.import, "no import call from the photos row").toEqual([]);
+    assertNoDeadEnds(stub);
 
     // 390px has to fit what the row just grew.
     const overflows = await page.evaluate(
@@ -221,7 +268,7 @@ test.describe("photos picker at 390px", () => {
     await awaitSplashGone(page);
   });
 
-  test("a repeat pick writes nothing and says what it skipped", async ({
+  test("a repeat pick writes nothing, lists the same photos as already here", async ({
     page,
   }) => {
     let polled = 0;
@@ -233,24 +280,33 @@ test.describe("photos picker at 390px", () => {
     await openSettings(page);
     const row = page.locator('[data-connector-id="photos"]');
     const receipt = row.locator('[data-testid="photos-receipt"]');
+    const items = row.locator('[data-testid="photos-picked-item"]');
 
     await row.locator('[data-testid="photos-start-pick"]').click();
     await expect(receipt).toHaveAttribute("data-pick-state", "imported", {
       timeout: 15_000,
     });
-    await expect(row.locator('[data-testid="photos-picked-item"]')).toHaveCount(2);
+    await expect(items).toHaveCount(2);
 
     // Same photos, picked again: the server skips by media item id, and the row
-    // must read as "nothing new" rather than growing a second set of items.
+    // must read as "nothing new" — not grow a second set of rows, and not lose
+    // the ones it already showed.
     await row.locator('[data-testid="photos-start-pick"]').click();
     await expect(receipt).toContainText("Nothing new: all 2 picked photos", {
       timeout: 15_000,
     });
     await expect(receipt).toHaveAttribute("data-pick-state", "imported");
-    await expect(row.locator('[data-testid="photos-picked-item"]')).toHaveCount(2);
+    await expect(items).toHaveCount(2);
+    for (const [index, item] of ITEMS.entries()) {
+      const line = items.nth(index);
+      // The deduped photo is still listed, by identity, as the note it matched.
+      await expect(line).toHaveAttribute("data-note-id", item.note_id);
+      await expect(line).toHaveAttribute("data-item-created", "false");
+      await expect(line).toContainText(item.title);
+      await expect(line).toContainText("already here");
+    }
     expect(stub.sessions(), "two picks, two sessions").toBe(2);
-    expect(stub.hits.preview).toEqual([]);
-    expect(stub.hits.import).toEqual([]);
+    assertNoDeadEnds(stub);
   });
 
   test("without a grant it offers the grant, not a pick", async ({ page }) => {
@@ -269,19 +325,72 @@ test.describe("photos picker at 390px", () => {
       "/api/v1/connectors/google_photos/connect",
     );
     expect(stub.sessions(), "a pick needs a grant; none was asked for").toBe(0);
-    expect(stub.hits.preview).toEqual([]);
-    expect(stub.hits.import).toEqual([]);
+    assertNoDeadEnds(stub);
+  });
+
+  test("a direct visit to the import wizard shows the pick, never the 503", async ({
+    page,
+  }) => {
+    const stub = await stubApi(page, { connectors: [PHOTOS] });
+
+    // The wizard route still exists for every other connector; for photos it is
+    // the one path that could reach `/preview` and `/import` unguarded.
+    await page.goto("/connectors/photos/import");
+
+    const notice = page.locator('[data-testid="photos-import-pick-only"]');
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText("Google Photos imports by picking");
+    assertNoDeadEnds(stub);
+
+    // And it hands over to the pick that does work.
+    await notice.locator('[data-testid="photos-import-start-pick"]').click();
+    await expect(page).toHaveURL(/\/connectors\/photos$/);
+    await expect(
+      page.locator('[data-connector-id="photos"] [data-testid="photos-start-pick"]'),
+    ).toBeVisible();
+    assertNoDeadEnds(stub);
   });
 });
 
-test.describe("photos picker on the connector screen", () => {
-  test("replaces the import link with the pick panel", async ({ page }) => {
-    // The desktop run is the one with room for the detail screen's layout; the
-    // mobile project already covers the row above.
+test.describe("photos picker on desktop", () => {
+  // The mobile project already covers the 390px row; the desktop run is the one
+  // with room for the connector screen and the wizard notice.
+  const desktopOnly = () =>
     test.skip(
       test.info().project.name !== "desktop-1440",
-      "the desktop project covers the connector screen",
+      "the desktop project covers the wide layouts",
     );
+
+  test("the settings row picks and lists every photo", async ({ page }) => {
+    desktopOnly();
+    let polled = 0;
+    const stub = await stubApi(page, {
+      connectors: [PHOTOS],
+      poll: () => (polled++ === 0 ? PENDING : IMPORTED),
+    });
+
+    await openSettings(page);
+    const row = page.locator('[data-connector-id="photos"]');
+
+    await row.locator('[data-testid="photos-start-pick"]').click();
+    await expect(row.locator('[data-testid="photos-picker-link"]')).toHaveAttribute(
+      "href",
+      SESSION.picker_uri,
+    );
+
+    const items = row.locator('[data-testid="photos-picked-item"]');
+    await expect(items).toHaveCount(ITEMS.length, { timeout: 15_000 });
+    await expect(items.nth(0)).toContainText(ITEMS[0].title);
+    await expect(
+      items.nth(0).locator('[data-testid="photos-picked-item-tag"]'),
+    ).toHaveAttribute("href", `/tags/${TRAVEL.id}`);
+    assertNoDeadEnds(stub);
+  });
+
+  test("replaces the import link with the pick panel on the connector screen", async ({
+    page,
+  }) => {
+    desktopOnly();
     let polled = 0;
     const stub = await stubApi(page, {
       connectors: [PHOTOS],
@@ -306,9 +415,16 @@ test.describe("photos picker on the connector screen", () => {
     ).toHaveAttribute("data-pick-state", "imported", { timeout: 15_000 });
     await expect(
       panel.locator('[data-testid="photos-picked-item"]'),
-    ).toHaveCount(2);
+    ).toHaveCount(ITEMS.length);
+    assertNoDeadEnds(stub);
+  });
 
-    expect(stub.hits.preview, "the screen must not reach the 503 preview").toEqual([]);
-    expect(stub.hits.import, "the screen must not reach the 503 import").toEqual([]);
+  test("the wizard route shows the pick notice, not a preview", async ({ page }) => {
+    desktopOnly();
+    const stub = await stubApi(page, { connectors: [PHOTOS] });
+
+    await page.goto("/connectors/photos/import");
+    await expect(page.locator('[data-testid="photos-import-pick-only"]')).toBeVisible();
+    assertNoDeadEnds(stub);
   });
 });

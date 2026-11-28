@@ -5,6 +5,13 @@
 //! server routing is involved — these are client-side pushes, so the bundle's static file
 //! server never needs to know these paths.
 
+// The `Routable` derive expands to a match whose last arm is a bare `unreachable!()`, which
+// rustc 1.100 reports as `unreachable_code` under `-D warnings` while pointing at the derive.
+// The call is the macro's, not this table's: every variant below is a live route. An attribute
+// on the enum does not reach the generated impl, so the allow is file-wide, and this file
+// holds nothing but the route table.
+#![allow(unreachable_code)]
+
 use dioxus::prelude::*;
 use strands_keymap::Action;
 

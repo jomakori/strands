@@ -20,6 +20,7 @@
 
 use dioxus::prelude::*;
 use strands_api_types::{ConnectorStatus, PhotoPickResult, PhotoPickState, PhotoSession};
+use uuid::Uuid;
 
 use crate::api;
 use crate::routes::Route;
@@ -121,20 +122,27 @@ pub fn PhotoPicker(status: Option<ConnectorStatus>) -> Element {
                         "data-pick-state": "{pick_state_key(result.state)}",
                         "{receipt_line(result)}"
                     }
-                    // The picks land as notes filed under the tag each photo was
-                    // filed by (`connector-photos`'s tag rules), so this is the
-                    // list of what actually arrived, ready to open.
-                    if !result.tags.is_empty() {
+                    // One row per picked photo, by the note it became: the
+                    // pick has no item list until the import runs, so this is
+                    // where "what arrived" is actually shown. A repeat pick
+                    // lists the same photos marked as already here.
+                    if !result.items.is_empty() {
                         ul { class: "photo-pick-items", "data-testid": "photos-picked-items",
-                            for tag in result.tags.iter() {
-                                li { class: "photo-pick-item", "data-testid": "photos-picked-item",
+                            for item in result.items.iter() {
+                                li {
+                                    class: "photo-pick-item",
+                                    "data-testid": "photos-picked-item",
+                                    "data-note-id": "{item.note_id}",
+                                    "data-item-created": if item.created { "true" } else { "false" },
+                                    span { class: "photo-pick-title", "{item.title}" }
                                     Link {
                                         class: "photo-pick-tag",
-                                        to: Route::TagDetail { tag_id: tag.id.to_string() },
-                                        "{tag.name}"
+                                        "data-testid": "photos-picked-item-tag",
+                                        to: Route::TagDetail { tag_id: item.tag_id.to_string() },
+                                        "{tag_name(result, item.tag_id)}"
                                     }
-                                    span { class: "photo-pick-count", "data-thread-count": "{tag.thread_count}",
-                                        "{tag.thread_count} notes"
+                                    if !item.created {
+                                        span { class: "photo-pick-count", "already here" }
                                     }
                                 }
                             }
@@ -193,6 +201,18 @@ pub fn PhotoPicker(status: Option<ConnectorStatus>) -> Element {
             }
         }
     }
+}
+
+/// The tag a picked photo was filed under, named from the same pick's `tags`
+/// (the pick reports every tag it touched); the fallback only covers a tag the
+/// server could not summarise.
+fn tag_name(result: &PhotoPickResult, tag_id: Uuid) -> String {
+    result
+        .tags
+        .iter()
+        .find(|tag| tag.id == tag_id)
+        .map(|tag| tag.name.clone())
+        .unwrap_or_else(|| "Open tag".to_owned())
 }
 
 /// The `data-pick-state` key for a finished pick, so a test reads the state the

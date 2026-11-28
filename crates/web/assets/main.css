@@ -2249,25 +2249,34 @@ button {
 
 .photo-pick-items {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
+  width: 100%;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-/* One row per tag the picked notes were filed under. The rows wrap rather than scroll: a pick can
- * land in several tags and a sideways scroller would hide them at 390px. */
+/* One row per picked photo: the note it became, the tag it was filed under, and whether the
+ * pick wrote it or found it already here. Rows stack instead of wrapping into pills because a
+ * caption is much longer than a tag name — a pill row would push the tag off a 390px screen. */
 .photo-pick-item {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
   max-width: 100%;
-  padding: 4px 10px;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 12px;
   background: var(--surface-2);
   font-size: 13px;
+}
+
+.photo-pick-title {
+  color: var(--fg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .photo-pick-tag {
