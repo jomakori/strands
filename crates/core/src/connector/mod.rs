@@ -116,7 +116,12 @@ pub trait Connector: Send + Sync {
     ) -> ConnectorFuture<'a, Result<Vec<ImportItemResult>, ConnectorError>>;
 
     /// Revoke access and forget this user's local state.
-    fn disconnect(&self, user: Uuid) -> Result<(), ConnectorError>;
+    ///
+    /// Async because the purge is a transaction: the stored material and the
+    /// connector row's own status move together or not at all. Connecting
+    /// nothing is not an error — a second `disconnect` is a no-op, so the
+    /// caller can retry a failed revoke without inventing state first.
+    fn disconnect<'a>(&'a self, user: Uuid) -> ConnectorFuture<'a, Result<(), ConnectorError>>;
 
     /// Old no-selection "sync everything" behaviour (spec §7.7), kept as a
     /// call site through `preview` + `import` rather than a second code path
@@ -209,8 +214,11 @@ mod default_sync_tests {
             })
         }
 
-        fn disconnect(&self, _user: Uuid) -> Result<(), ConnectorError> {
-            Ok(())
+        fn disconnect<'a>(
+            &'a self,
+            _user: Uuid,
+        ) -> ConnectorFuture<'a, Result<(), ConnectorError>> {
+            Box::pin(async { Ok(()) })
         }
     }
 

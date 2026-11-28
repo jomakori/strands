@@ -201,6 +201,14 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --lib "connectors::photos_refresh::tests"
 
+      # B4: disconnect is a DB-gated lib test — it seeds a connected row with a
+      # sealed token, drives POST /disconnect through the real router and reads
+      # the rows back, so it needs Postgres and must not skip in the job above.
+      - name: Run the connector disconnect tests
+        env:
+          STRANDS_TEST_REQUIRE_DB: "1"
+        run: cargo test --package strands-server --lib "connectors::tests"
+
   wasm-build:
     name: Build the WASM bundle
     runs-on: ubuntu-latest
