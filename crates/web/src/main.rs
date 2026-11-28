@@ -14,6 +14,7 @@ mod home;
 mod import;
 mod keys;
 mod nav;
+mod photos_pick;
 mod pull;
 mod routes;
 mod search;

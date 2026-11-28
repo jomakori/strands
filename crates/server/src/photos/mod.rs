@@ -28,7 +28,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use chrono::{DateTime, Duration, Utc};
 use sqlx::{Postgres, Transaction};
-use strands_api_types::{PhotoPickResult, PhotoPickState, PhotoSession};
+use strands_api_types::{PhotoPickResult, PhotoPickState, PhotoSession, PickedPhoto};
 use strands_connector_photos::picker::BASE_URL_WINDOW_MINUTES;
 use strands_connector_photos::{
     PhotosError, PickedItem, PickerApi, PickerSession, Thumbnail, dedupe_key, note_body, tag_hint,
@@ -128,6 +128,7 @@ pub async fn poll_session(
                 notes_created: 0,
                 notes_skipped: created + skipped,
                 tags: Vec::new(),
+                items: Vec::new(),
             }));
         }
         // Already rotated once. Answering with *the same* successor keeps a
@@ -140,6 +141,7 @@ pub async fn poll_session(
                 notes_created: 0,
                 notes_skipped: created + skipped,
                 tags: Vec::new(),
+                items: Vec::new(),
             }));
         }
         _ => {}
@@ -171,6 +173,7 @@ pub async fn poll_session(
                 notes_created: 0,
                 notes_skipped: 0,
                 tags: Vec::new(),
+                items: Vec::new(),
             }));
         }
         Ok(_) => {}
@@ -218,6 +221,7 @@ pub async fn poll_session(
             notes_created: 0,
             notes_skipped: 0,
             tags: Vec::new(),
+            items: Vec::new(),
         }));
     }
 
@@ -226,6 +230,7 @@ pub async fn poll_session(
             created,
             skipped,
             tags,
+            picked,
         } => {
             mark(
                 &state.pool,
@@ -242,6 +247,7 @@ pub async fn poll_session(
                 notes_created: created,
                 notes_skipped: skipped,
                 tags: load_tag_summaries(&state.pool, user.id, &tags).await?,
+                items: picked,
             }))
         }
         // Whatever landed before the download window closed stays; the retry
@@ -266,6 +272,8 @@ enum Import {
         created: usize,
         skipped: usize,
         tags: Vec<Uuid>,
+        /// One entry per photo that resolved to a note, in pick order.
+        picked: Vec<PickedPhoto>,
     },
     Expired {
         created: usize,
@@ -300,6 +308,7 @@ async fn import_items(
     let mut created = 0usize;
     let mut skipped = 0usize;
     let mut tag_ids: Vec<Uuid> = Vec::new();
+    let mut picked: Vec<PickedPhoto> = Vec::new();
     let mut index: Option<TagIndex> = None;
 
     for item in items {
@@ -332,10 +341,38 @@ async fn import_items(
         if !tag_ids.contains(&tag_id) {
             tag_ids.push(tag_id);
         }
-        if write_item(&mut tx, user_id, tag_id, item, &thumbnail).await? {
-            created += 1;
-        } else {
-            skipped += 1;
+        let note = Note::new(note_body(item), Source::GooglePhotos)?;
+        let title = note.title();
+        match write_item(&mut tx, user_id, tag_id, item, &note, &thumbnail).await? {
+            Some(note_id) => {
+                created += 1;
+                picked.push(PickedPhoto {
+                    note_id,
+                    title,
+                    tag_id,
+                    created: true,
+                });
+            }
+            // The conflict says the note exists; its id is what lets the client
+            // still show the photo as one of this pick's items.
+            None => {
+                skipped += 1;
+                let existing: Option<Uuid> = sqlx::query_scalar(
+                    "SELECT id FROM notes WHERE user_id = $1 AND dedupe_key = $2",
+                )
+                .bind(user_id)
+                .bind(dedupe_key(item))
+                .fetch_optional(&mut *tx)
+                .await?;
+                if let Some(note_id) = existing {
+                    picked.push(PickedPhoto {
+                        note_id,
+                        title,
+                        tag_id,
+                        created: false,
+                    });
+                }
+            }
         }
         tx.commit().await?;
     }
@@ -344,19 +381,20 @@ async fn import_items(
         created,
         skipped,
         tags: tag_ids,
+        picked,
     })
 }
 
-/// Insert one photo note, its thread and its preview; `false` when the item was
+/// Insert one photo note, its thread and its preview; `None` when the item was
 /// already imported (the conflict is the idempotency, not a code path).
 async fn write_item(
     conn: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
     tag_id: Uuid,
     item: &PickedItem,
+    note: &Note,
     thumbnail: &Thumbnail,
-) -> Result<bool, AppError> {
-    let note = Note::new(note_body(item), Source::GooglePhotos)?;
+) -> Result<Option<Uuid>, AppError> {
     // A pick can predate its download, so the note is anchored to when the photo
     // was taken; without a capture time the import moment is the honest one.
     let occurred_at = item.create_time.unwrap_or_else(Utc::now);
@@ -391,7 +429,7 @@ async fn write_item(
     .await?;
 
     let Some(note_id) = note_id else {
-        return Ok(false);
+        return Ok(None);
     };
 
     let thread_id = Uuid::new_v4();
@@ -440,7 +478,7 @@ async fn write_item(
     )
     .await?;
 
-    Ok(true)
+    Ok(Some(note_id))
 }
 
 /// `GET /api/v1/notes/{note_id}/thumbnail` — the stored preview bytes.
@@ -524,6 +562,9 @@ async fn expire_and_replace(
         notes_created: created,
         notes_skipped: skipped,
         tags: Vec::new(),
+        // A lapsed import's receipt is the counts: the list arrives with the
+        // replacement session, which re-lists the items Google still holds.
+        items: Vec::new(),
     })
 }
 

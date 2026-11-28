@@ -435,6 +435,46 @@ async fn three_picked_items_become_three_notes_with_durable_thumbnails() {
     let notes = harness.note_ids(&user).await;
     assert_eq!(notes.len(), 3, "one note per picked item");
 
+    // The receipt lists the pick photo by photo — the note each became, and the
+    // tag it was filed under — so a count of tag rows could never stand in for it.
+    let items = body["items"].as_array().expect("a pick lists its items");
+    assert_eq!(items.len(), 3, "one row per picked photo: {body}");
+    let listed: Vec<Uuid> = items
+        .iter()
+        .map(|item| serde_json::from_value(item["note_id"].clone()).expect("note id"))
+        .collect();
+    let mut filed: Vec<Uuid> = notes.iter().map(|(id, _)| *id).collect();
+    let mut seen = listed.clone();
+    filed.sort();
+    seen.sort();
+    assert_eq!(
+        seen, filed,
+        "the list names exactly the notes the pick wrote, one row each: {body}"
+    );
+    for (index, item) in items.iter().enumerate() {
+        assert_eq!(item["created"], true, "row {index} was written: {body}");
+        assert!(
+            item["title"]
+                .as_str()
+                .is_some_and(|title| !title.is_empty()),
+            "row {index} carries the note's title: {body}"
+        );
+    }
+
+    // Every listed tag is the row's own note's tag, not a bag of every tag touched.
+    for (index, item) in items.iter().enumerate() {
+        let tag_id: Uuid = serde_json::from_value(item["tag_id"].clone()).expect("tag id");
+        let filed_tag: Uuid = sqlx::query_scalar("SELECT tag_id FROM notes WHERE id = $1")
+            .bind(listed[index])
+            .fetch_one(&harness.pool)
+            .await
+            .expect("the note exists");
+        assert_eq!(
+            filed_tag, tag_id,
+            "the item's tag is the note's tag: {item}"
+        );
+    }
+
     // The caption wins the tag hint, so the two captioned items share a tag.
     let tag: (String, i64) = sqlx::query_as(
         "SELECT t.name, count(*) FROM notes n JOIN tags t ON t.id = n.tag_id \
@@ -479,6 +519,15 @@ async fn three_picked_items_become_three_notes_with_durable_thumbnails() {
     assert_eq!(body["notes_created"], 0, "a repeat poll creates no notes");
     assert_eq!(body["notes_skipped"], 3);
     assert_eq!(harness.note_ids(&user).await.len(), 3);
+
+    // A re-poll is the receipt only: the pick's baseUrls died with it, so there is
+    // no item list to re-read. Dedupe is proved on a *second* pick, below.
+    assert!(
+        body["items"]
+            .as_array()
+            .is_some_and(|items| items.is_empty()),
+        "a re-poll lists nothing: {body}"
+    );
     assert_eq!(
         harness
             .count(
@@ -487,6 +536,55 @@ async fn three_picked_items_become_three_notes_with_durable_thumbnails() {
             )
             .await,
         3
+    );
+}
+
+#[tokio::test]
+async fn a_second_pick_of_the_same_photos_lists_them_as_already_here() {
+    let Some(harness) = Harness::connect(three_picks()).await else {
+        return;
+    };
+    let user = harness.user("carol").await;
+    harness.connect_photos(&user).await;
+
+    let first = harness.start_pick(&user).await;
+    let (status, body) = harness.poll(&user, &first).await;
+    assert_eq!(status, StatusCode::OK, "first pick: {body}");
+    assert_eq!(body["notes_created"], 3);
+    let written = harness.note_ids(&user).await;
+
+    // Same photos, picked again in a fresh session. Dedupe is by media item id, so
+    // every row has to come back marked as already here and pointing at the note
+    // the first pick wrote — a count of tag rows could not tell that apart from a
+    // run that quietly dropped one.
+    let second = harness.start_pick(&user).await;
+    assert_ne!(second, first, "a new pick opens a new session");
+    let (status, body) = harness.poll(&user, &second).await;
+    assert_eq!(status, StatusCode::OK, "second pick: {body}");
+    assert_eq!(body["state"], "imported");
+    assert_eq!(body["notes_created"], 0, "a repeat pick writes nothing");
+    assert_eq!(body["notes_skipped"], 3);
+    assert_eq!(
+        harness.note_ids(&user).await.len(),
+        3,
+        "no second note each"
+    );
+
+    let items = body["items"].as_array().expect("the pick lists its items");
+    assert_eq!(items.len(), 3, "one row per picked photo: {body}");
+    let mut listed: Vec<Uuid> = items
+        .iter()
+        .map(|item| {
+            assert_eq!(item["created"], false, "nothing was written: {item}");
+            serde_json::from_value(item["note_id"].clone()).expect("note id")
+        })
+        .collect();
+    let mut written: Vec<Uuid> = written.iter().map(|(id, _)| *id).collect();
+    listed.sort();
+    written.sort();
+    assert_eq!(
+        listed, written,
+        "every skipped photo names the note it matched: {body}"
     );
 }
 

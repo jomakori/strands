@@ -22,6 +22,7 @@ use dioxus::prelude::*;
 use strands_api_types::{ConnectorHistory, WhatsAppLinkState};
 
 use crate::api::{self, ApiError};
+use crate::photos_pick;
 use crate::routes::Route;
 use crate::state::{self, EmptyNotice, RetryNotice, Skeleton};
 
@@ -161,9 +162,57 @@ enum PhoneGate {
     Failed(String),
 }
 
-/// The whole wizard: `/connectors/:id/import`.
+/// `/connectors/:id/import`.
+///
+/// Photos has no preview and nothing to tick: its preview and import routes
+/// answer 503 by design, because a pick is the only way photos arrive. So a
+/// direct visit here answers with the pick instead of asking for a preview,
+/// which is what keeps that 503 pair unreachable from the UI — the wizard below
+/// is the only caller of `connector_preview`/`connector_import`, and it never
+/// mounts for photos. Every other connector gets it unchanged.
 #[component]
 pub fn ImportWizard(id: String) -> Element {
+    if id == photos_pick::PHOTOS_CONNECTOR_ID {
+        return rsx! { PhotosPickOnly {} };
+    }
+    rsx! { PreviewWizard { id } }
+}
+
+/// The Photos stand-in for the wizard: there is no preview to read, and the way
+/// in is the pick that lives on the connector's own screen.
+#[component]
+fn PhotosPickOnly() -> Element {
+    rsx! {
+        div { class: "app",
+            header { class: "top-row",
+                Link { class: "back-link", to: Route::Settings {}, "aria-label": "Back to connectors",
+                    "← Connectors"
+                }
+            }
+            main { class: "feed", "aria-label": "Import from photos",
+                div { class: "feed-inner", "data-testid": "photos-import-pick-only",
+                    h1 { class: "name", "Google Photos imports by picking" }
+                    EmptyNotice {
+                        title: "There is no preview to import.".to_owned(),
+                        hint: "Photos arrive through a pick: you choose them in Google's window, and each one is filed as a note when you are done.".to_owned(),
+                    }
+                    footer { class: "import-footer",
+                        Link {
+                            class: "button button-primary",
+                            to: Route::ConnectorScreen { id: photos_pick::PHOTOS_CONNECTOR_ID.to_string() },
+                            "data-testid": "photos-import-start-pick",
+                            "Start a pick"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The whole wizard: `/connectors/:id/import`.
+#[component]
+fn PreviewWizard(id: String) -> Element {
     let mut attempt = use_signal(|| 0_u32);
     let connector_id = id.clone();
     let preview = use_resource(move || {

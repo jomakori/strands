@@ -36,7 +36,7 @@ pub use gmaps::{GmapsFormat, GmapsIngestResult, PlaceEnrichment, PlaceListSummar
 pub use ingest::{IngestItem, IngestRequest, IngestResult};
 pub use link::{JudgeLinksResponse, LinkSummary};
 pub use me::Profile;
-pub use photos::{PhotoPickResult, PhotoPickState, PhotoSession};
+pub use photos::{PhotoPickResult, PhotoPickState, PhotoSession, PickedPhoto};
 pub use places::{
     AcceptedPlace, BackfillItem, BackfillPlace, BackfillRequest, BackfillResult, BackfillSource,
     MAX_BACKFILL_ITEMS, MAX_NEARBY_CANDIDATES, NearbyCandidate, NearbyRequest, NearbyResult,

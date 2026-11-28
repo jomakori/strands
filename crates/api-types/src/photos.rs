@@ -15,6 +15,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::TagSummary;
 
@@ -43,6 +44,23 @@ pub enum PhotoPickState {
     Expired,
 }
 
+/// One picked photo, as the note it became.
+///
+/// Google only reveals what was picked when the user finishes, so this list is
+/// the client's first and only per-item view of a pick: the note that was
+/// written (or already existed), its title, and where it was filed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PickedPhoto {
+    /// The note this item wrote, or the note it deduped against.
+    pub note_id: Uuid,
+    /// The note's title — the caption when it had one, else a plain description.
+    pub title: String,
+    /// The tag the note was filed under.
+    pub tag_id: Uuid,
+    /// `false` when the media item was already imported and nothing was written.
+    pub created: bool,
+}
+
 /// Body of `GET /api/v1/connectors/photos/sessions/{id}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhotoPickResult {
@@ -55,6 +73,10 @@ pub struct PhotoPickResult {
     pub notes_skipped: usize,
     /// The tags the new notes were filed under, ready for the grid.
     pub tags: Vec<TagSummary>,
+    /// One entry per picked photo, in pick order. Empty while `pending`, when
+    /// the pick was `empty`, and on a repeat poll of an `imported` session.
+    #[serde(default)]
+    pub items: Vec<PickedPhoto>,
 }
 
 #[cfg(test)]
@@ -79,9 +101,43 @@ mod tests {
             notes_created: 0,
             notes_skipped: 0,
             tags: Vec::new(),
+            items: Vec::new(),
         };
         let json = serde_json::to_string(&result).expect("serialize");
         let back: PhotoPickResult = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(result, back);
+    }
+
+    #[test]
+    fn a_pick_lists_one_entry_per_photo_and_says_which_were_new() {
+        let result = PhotoPickResult {
+            state: PhotoPickState::Imported,
+            session: None,
+            notes_created: 1,
+            notes_skipped: 1,
+            tags: Vec::new(),
+            items: vec![
+                PickedPhoto {
+                    note_id: Uuid::nil(),
+                    title: "Sunrise over the bay".to_owned(),
+                    tag_id: Uuid::nil(),
+                    created: true,
+                },
+                PickedPhoto {
+                    note_id: Uuid::nil(),
+                    title: "Breakfast at the market".to_owned(),
+                    tag_id: Uuid::nil(),
+                    created: false,
+                },
+            ],
+        };
+        let json = serde_json::to_string(&result).expect("serialize");
+        assert!(
+            json.contains("\"items\":["),
+            "the items are on the wire, not only the counts: {json}"
+        );
+        let back: PhotoPickResult = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.items.len(), 2);
+        assert!(!back.items[1].created, "a deduped photo is still listed");
     }
 }
