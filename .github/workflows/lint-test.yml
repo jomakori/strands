@@ -54,8 +54,7 @@ jobs:
       - name: Cache the cargo registry and build output
         uses: Swatinem/rust-cache@v2
 
-      # strands-web only compiles for wasm32-unknown-unknown, so it is linted
-      # by the wasm-build job instead of here.
+      # allow: strands-web only targets wasm32-unknown-unknown, so wasm-build lints it instead of this job
       - name: Run clippy across the host-target members
         run: cargo clippy --workspace --exclude strands-web --all-targets -- -D warnings
 
@@ -121,13 +120,8 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test schema_shape
 
-      # Ticket T3: the isolation rules need a real database, so they run against
-      # the same postgres:17 service as the schema check. They drive the real
-      # router through the real login flow with a fake identity provider in
-      # place of Google's network calls.
       - name: Run the auth isolation acceptance test
-        # STRANDS_TEST_REQUIRE_DB makes an unreachable database a failure rather
-        # than a skip — CI promises Postgres here, so a skip must not pass.
+        # allow: STRANDS_TEST_REQUIRE_DB turns an unreachable database into a failure instead of a silent skip
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test auth_isolation
@@ -137,33 +131,20 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test summary_generation
 
-      # Ticket T16: ingest, lists and the KML export are DB-gated. Without this
-      # step they would be skipped by the plain `cargo test` job above — which
-      # has no DATABASE_URL — and the acceptance criteria would never run.
       - name: Run the Google Maps ingest acceptance test
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test gmaps_ingest
-      # Ticket T10: judging needs real rows because idempotence is enforced by
-      # the unique index on the ordered pair. The judge is a fake, so no test
-      # here reaches the network or spends model tokens.
       - name: Run the link judging acceptance test
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test links
 
-      # C2: these suites seed `connector_secrets` and read the token back
-      # through the per-account derivation, so the v2 write path and the
-      # `key_version` column are exercised against real rows, not mocks.
       - name: Run the connector secret acceptance tests
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --test connector_registry --test photos_picker
 
-      # C3: staging demo mode. The boot test needs Postgres because the demo
-      # account and its content are seeded at startup, and the seed-idempotence
-      # test is a `--lib` test that also skips without DATABASE_URL — so both run
-      # here rather than in the plain `cargo test` job above.
       - name: Run the staging demo mode acceptance tests
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
@@ -174,36 +155,21 @@ jobs:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --lib "demo::tests"
 
-      # B1: the connect-state table and the token columns are DB-gated lib tests.
-      # Without this step they would be skipped by the plain `cargo test` job,
-      # which has no DATABASE_URL, and the migration would never be exercised on
-      # a real Postgres — this job's `sqlx migrate run` above only proves it
-      # applies, not that the row round-trips.
       - name: Run the connector OAuth state tests
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --lib "oauth::tests"
 
-      # B2: the connect and callback routes are DB-gated lib tests — they write
-      # the state row, seal the token and read it back — so they run here, where
-      # Postgres exists, and never skip silently in the job above.
       - name: Run the Google Photos connect tests
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --lib "connectors::photos_connect::tests"
 
-      # B3: the refresh path is a DB-gated lib test — it seeds a lapsed token
-      # row, redeems a stub refresh token and reads the re-sealed row back — so
-      # it runs here, where Postgres exists, instead of skipping in the job
-      # above.
       - name: Run the Google Photos refresh tests
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
         run: cargo test --package strands-server --lib "connectors::photos_refresh::tests"
 
-      # B4: disconnect is a DB-gated lib test — it seeds a connected row with a
-      # sealed token, drives POST /disconnect through the real router and reads
-      # the rows back, so it needs Postgres and must not skip in the job above.
       - name: Run the connector disconnect tests
         env:
           STRANDS_TEST_REQUIRE_DB: "1"
@@ -217,8 +183,6 @@ jobs:
       contents: read
     env:
       DIOXUS_CLI_VERSION: "0.7.10"
-      # 2.5 MiB, measured on the gzip of the release wasm — the bytes a browser
-      # actually downloads. scripts/wasm-budget.sh is the gate.
       WASM_GZIP_BUDGET_BYTES: "2621440"
     steps:
       - name: Check out repository
@@ -246,8 +210,6 @@ jobs:
             echo "::error::could not locate the dx web bundle under target/dx"
             exit 1
           fi
-          # dx leaves the wasm of every earlier build beside the new one, so take
-          # the newest — that is the file index.html's module loads.
           WASM=$(find "${PUBLIC_DIR}" -maxdepth 2 -name 'strands-web*.wasm' -type f -printf '%T@ %p\n' | sort -rn | head -n1 | cut -d' ' -f2-)
           if [ -z "${WASM}" ]; then
             echo "::error::the bundle at ${PUBLIC_DIR} carries no strands-web*.wasm"
@@ -260,9 +222,6 @@ jobs:
           echo "bundle_dir=${PUBLIC_DIR}" >>"${GITHUB_OUTPUT}"
 
       - name: Enforce the wasm gzip budget
-        # The table is the record of what we measured, so prove it reached the job
-        # summary instead of assuming the write path works. The budget verdict
-        # keeps its own exit code: over budget still fails, summary or not.
         run: |
           status=0
           scripts/wasm-budget.sh artifacts || status=$?
@@ -279,9 +238,6 @@ jobs:
           path: ${{ steps.bundle.outputs.bundle_dir }}
           if-no-files-found: error
 
-  # Layout claims belong to the build, not to whoever last ran the app by hand:
-  # this job drives a real Chromium against the release bundle and fails when a
-  # viewport stops fitting or a capture stops matching the expected content.
   visual:
     name: Capture and verify the rendered UI
     needs: wasm-build
@@ -317,10 +273,6 @@ jobs:
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          # The runner's Ubuntu mirror flakes often enough to fail whole runs on a font package.
-          # The browser is what the capture needs, so system deps get three attempts and, if the
-          # mirror stays unreachable, the browser alone goes in — glyph substitution is a smaller
-          # loss than a red check that says nothing about the UI.
           for attempt in 1 2 3; do
             npx --prefix e2e playwright install --with-deps chromium && exit 0
             echo "system deps attempt $attempt failed; retrying in 20s"
@@ -345,9 +297,6 @@ jobs:
           echo "::error::the bundle never answered on ${STRANDS_BASE_URL}"
           exit 1
 
-      # Accessibility is part of the render claim: the score comes from axe plus the computed
-      # contrast and keyboard passes in tests/a11y.spec.ts, at both viewports. The threshold
-      # and the measurements live in that spec; this step only reports and gates on them.
       - name: Enforce accessibility >= 95 on both views
         working-directory: e2e
         run: |

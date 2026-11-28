@@ -1,35 +1,40 @@
 name: Release
 
-# One workflow per release: run on every merge to main, dispatchable by hand for the merge that
-# did not release. svu derives the next version from the tags and conventional commits, the tag
-# is pushed here, the image is built from it, and the same run moves the prod pin in gke_GitOps —
-# version, image and pin decided in one place. semantic-release is gone with its npm plugin
-# chain; it did the same three things behind more machinery.
-
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: write
   packages: write
 
 jobs:
-  release:
-    runs-on: ubuntu-24.04-arm
+  build:
+    name: Build Release
+    runs-on: ubuntu-26.04-arm
     timeout-minutes: 60
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
       - name: Install svu
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release download -R caarlos0/svu -p 'svu_*_linux_arm64.tar.gz' -D "$RUNNER_TEMP/svu" --clobber
+          gh release download -R caarlos0/svu -p 'svu_*_linux_arm64.tar.gz' \
+            -D "$RUNNER_TEMP/svu" --clobber
           tar -xzf "$RUNNER_TEMP"/svu/*.tar.gz -C /usr/local/bin svu
           svu --version
+
       - name: Tag the next version
         id: tag
         env:
@@ -38,26 +43,32 @@ jobs:
           set -euo pipefail
           current="$(svu current)"
           next="$(svu next)"
-          echo "current=$current next=$next" >> "$GITHUB_STEP_SUMMARY"
           if [ "$current" = "$next" ]; then
-            # An earlier run may have tagged the version and died before publishing it.
             if git rev-parse -q --verify "refs/tags/$current" >/dev/null \
               && ! gh release view "$current" >/dev/null 2>&1; then
               echo "Resuming unpublished $current." >> "$GITHUB_STEP_SUMMARY"
               echo "version=${current#v}" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "No releasable commits since $current — nothing to tag."
+            echo "No releasable commits since $current."
             exit 0
           fi
           git tag "$next"
           git push origin "$next"
           echo "version=${next#v}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v4
+
+      - name: Set up Docker Buildx
         if: steps.tag.outputs.version != ''
-      - name: Log in to the registry
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GitHub Container Registry
         if: steps.tag.outputs.version != ''
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build and push the image
         if: steps.tag.outputs.version != ''
         env:
@@ -68,30 +79,55 @@ jobs:
             --build-arg GIT_COMMIT="$GITHUB_SHA" \
             -t "ghcr.io/jomakori/strands:${VERSION}" \
             -t ghcr.io/jomakori/strands:latest .
+
       - name: Publish the release
         if: steps.tag.outputs.version != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.tag.outputs.version }}
-        run: gh release create "v${VERSION}" --generate-notes --latest
-      - name: Pin production to this release
-        if: steps.tag.outputs.version != ''
+        run: gh release create "v${VERSION}" --generate-notes --latest --verify-tag
+
+  deploy:
+    name: Deploy Release
+    needs: build
+    if: needs.build.outputs.version != ''
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 10
+    steps:
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v4.0.1
+
+      - name: Fetch the GitOps token
+        id: pat
         env:
-          GITOPS_TOKEN: ${{ secrets.GITOPS_TOKEN }}
-          VERSION: ${{ steps.tag.outputs.version }}
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: |
           set -euo pipefail
-          version="$VERSION"
-          gitops="$(mktemp -d)"
-          git clone --depth 1 "https://x-access-token:${GITOPS_TOKEN}@github.com/jomakori/gke_GitOps.git" "$gitops"
-          values="$gitops/apps/helm/values.yaml"
-          VERSION="$version" yq -i '.strands.environments.production.tag = strenv(VERSION)' "$values"
-          cd "$gitops"
+          token="$(doppler secrets get GITHUB_TOKEN --plain --project devops --config ci)"
+          echo "::add-mask::$token"
+          echo "token=$token" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout the GitOps repo
+        uses: actions/checkout@v7
+        with:
+          repository: jomakori/gke_GitOps
+          ref: main
+          token: ${{ steps.pat.outputs.token }}
+          path: gitops
+
+      - name: Pin the production tag
+        env:
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          yq -i '.strands.environments.production.tag = strenv(VERSION)' gitops/apps/helm/values.yaml
+          cd gitops
           if git diff --quiet; then
-            echo "strands production already pinned to ${version}"
+            echo "strands production already pinned to ${VERSION}"
             exit 0
           fi
-          git -c user.name="strands-release[bot]" -c user.email="release@users.noreply.github.com" \
-            commit -q -am "chore(apps): pin strands prod to ${version}"
+          git -c user.name="strands-release[bot]" \
+            -c user.email="release@users.noreply.github.com" \
+            commit -q -am "chore(apps): pin strands prod to ${VERSION}"
           git push -q origin HEAD:main
-          echo "pinned strands production to ${version}"
+          echo "pinned strands production to ${VERSION}" >> "$GITHUB_STEP_SUMMARY"

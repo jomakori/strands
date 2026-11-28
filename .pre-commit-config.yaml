@@ -1,21 +1,3 @@
-# Strands pre-commit hooks.
-#
-# Shift-left gate: catches the high-frequency failures at commit time so CI
-# only sees the heavy stuff (full-workspace clippy + test + wasm bundle build).
-#
-# What's IN scope here:
-#   - cargo fmt --all -- --check            (parse + style, no system deps)
-#   - cargo check -p strands-core -p strands-server
-#                                           (the members that build for the host)
-#   - cargo clippy -p strands-core -p strands-server -- -D warnings
-#
-# What's OUT of scope (CI-only):
-#   - strands-web: it only compiles for wasm32-unknown-unknown, so the wasm-build
-#                  CI job lints and builds it.
-#   - cargo test --workspace: needs the full app build.
-#
-# Install: `pre-commit install`. Update: `pre-commit autoupdate`.
-
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
