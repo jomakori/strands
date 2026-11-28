@@ -5,6 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   packages: write
@@ -86,7 +90,7 @@ jobs:
         if: steps.tag.outputs.version != ''
         env:
           VERSION: ${{ steps.tag.outputs.version }}
-        run: gh release create "v${VERSION}" --generate-notes --latest
+        run: gh release create "v${VERSION}" --generate-notes --latest --verify-tag
 
   deploy:
     name: Deploy Release
@@ -114,7 +118,7 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           set -euo pipefail
-          VERSION="$VERSION" yq -i '.strands.environments.production.tag = strenv(VERSION)' gitops/apps/helm/values.yaml
+          yq -i '.strands.environments.production.tag = strenv(VERSION)' gitops/apps/helm/values.yaml
           cd gitops
           if git diff --quiet; then
             echo "strands production already pinned to ${VERSION}"
